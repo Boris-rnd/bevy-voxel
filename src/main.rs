@@ -2,281 +2,227 @@
 pub static mut CUBE_COUNT: usize = 0;
 use std::ops::RangeInclusive;
 
-use bevy::{pbr::{NotShadowCaster, NotShadowReceiver}, prelude::*, render::{batching::NoAutomaticBatching, view::NoFrustumCulling}};
-use camera::PanOrbitCameraBundle;
+use bevy::{
+    asset::RenderAssetUsages, pbr::{NotShadowCaster, NotShadowReceiver}, prelude::*, render::{batching::NoAutomaticBatching, render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat}, view::NoFrustumCulling}
+};
 use noise::{NoiseFn, Perlin};
 use world::{CHUNK_SIZE, CHUNK_SIZEI};
 
-pub mod camera;
 pub mod build;
+pub mod camera;
 pub mod world;
+use bevy::{
+    prelude::*,
+    reflect::TypePath,
+    render::render_resource::{AsBindGroup, ShaderRef},
+};
 
 fn main() {
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins)
-    //    .add_plugins(MeshletPlugin)
-       .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
-       .add_plugins(iyes_perf_ui::PerfUiPlugin)
-       .add_plugins(world::WorldPlugin{})
-       .add_systems(Startup, setup)
-       .add_systems(Startup, build::setup)
-       .add_systems(Update, build::build)
-       .add_systems(Update, camera::camera_movement);
-
-    // #[cfg(debug_assertions)] // debug/dev builds only
-    // app.add_plugins(bevy::diagnostic::LogDiagnosticsPlugin {
-    //     debug: true,
-    //     wait_duration: Duration::from_secs(1),
-    //     filter: Some(vec![DiagnosticPath::new()]),
-    // });
-
+    app.add_plugins((
+        DefaultPlugins.set(AssetPlugin {
+            watch_for_changes_override: Some(true),
+            ..Default::default()
+        }),
+        MaterialPlugin::<CustomMaterial>::default(),
+        // bevy::render::diagnostic::RenderDiagnosticsPlugin,
+    ))
+    .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
+    .add_plugins(iyes_perf_ui::PerfUiPlugin)
+    .add_systems(Startup, setup)
+    .add_systems(Update, update);
     app.run();
 }
 
-pub fn setup(
+fn setup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    // mut meshes_let: ResMut<Assets<MeshletMesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    window_query: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut materials: ResMut<Assets<CustomMaterial>>,
+    mut buffers: ResMut<Assets<bevy::render::storage::ShaderStorageBuffer>>,
+    mut imgs: ResMut<Assets<Image>>,
+    asset_server: Res<AssetServer>,
 ) {
-    commands.spawn(iyes_perf_ui::prelude::PerfUiCompleteBundle::default());
-    let mut camera = PanOrbitCameraBundle {
-        camera: Camera3dBundle { ..Default::default() },
-        ..Default::default()
-    };
-    // Position our camera using our component,
-    // not Transform (it would get overwritten)
-    camera.state.center = Vec3::new(0.0, 10.0, 0.0);
-    camera.state.radius = 50.0;
-    camera.state.pitch = 0.0f32.to_radians();
-    camera.state.yaw = 90.0f32.to_radians();
-    commands.spawn(camera);
-    // .insert(GpuCulling).insert(NoCpuCulling);
-    let world = world::World::new(0);
-    let material = materials.add(Color::srgb_u8(255, 255, 255));
-    let cube = meshes.add(Cuboid::new(1., 1., 1.));
+    commands.spawn(iyes_perf_ui::prelude::PerfUiDefaultEntries::default());
+    let trans = Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y);
 
-    for x in -2..2 {
-        for z in -2..2 {
-            gen_chunk(x, z, &world, &mut commands, cube.clone(), material.clone());
+    let spheres = &[
+        sphere(vec3(0., 0., -1.2), 0.5, vec3(0.1, 0.2, 0.5)),
+        // sphere(vec3(-1., 0., -1.), 0.5, vec3(0.8, 0.8, 0.8)),
+        // sphere(vec3(1., 0., -1.), 0.5, vec3(0.8, 0.8, 0.8)),
+        // sphere(vec3(0., -100.5, -1.), 100., vec3(0.8, 0.6, 0.2)),
+    ];
+    let spheres_buffer = buffers.add(bevy::render::storage::ShaderStorageBuffer::from(spheres));
+    let boxes = &[new_box(
+        vec3(-3., 0., -1.),
+        vec3(-2.5, -0.5, -1.5),
+        vec3(0.8, 0.9, 0.9),
+    )];
+    let boxes_buffer = buffers.add(bevy::render::storage::ShaderStorageBuffer::from(boxes));
+    let center = vec3(0., 0., 0.);
+
+
+    let mut imgs_raw = Vec::new();
+    for entry in std::fs::read_dir("assets/images").unwrap() {
+        let img = image::ImageReader::open(entry.unwrap().path()).unwrap().decode().unwrap().to_rgba8();
+        imgs_raw.push(img);
+    }
+    let width = imgs_raw[0].width();
+    let height = imgs_raw[0].height();
+    let layers = imgs_raw.len() as u32;
+    let mut combined = image::ImageBuffer::new(width, height * layers);
+    for (i, img) in imgs_raw.iter().enumerate() {
+        image::GenericImage::copy_from(&mut combined, img, 0, i as u32 * height).unwrap();
+    }
+
+    let data = combined.into_raw(); // Vec<u8>
+    let mut image = Image::new(
+        Extent3d { width, height: height * layers, depth_or_array_layers: 1 },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.reinterpret_stacked_2d_as_array(layers);
+    let atlas_handle = imgs.add(image);
+
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::from_size(vec3(1.6, 0.9, 1.)))),
+        MeshMaterial3d(materials.add(CustomMaterial {
+            image_dimensions: window_query.single().unwrap().resolution.size(),
+            spheres: spheres_buffer,
+            camera: FragCamera {
+                center,
+                direction: look_at(center, vec3(0., 0., -1.)),
+                fov: 90.,
+            },
+            boxes: boxes_buffer,
+            atlas: atlas_handle,
+        })),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+    ));
+
+    commands.spawn((Camera3d::default(), Camera::default(), trans));
+}
+
+fn look_at(origin: Vec3, look_at: Vec3) -> Vec3 {
+    look_at - origin
+}
+
+fn update(
+    mut cam: Query<&mut Transform, With<Camera>>,
+    mut mats: ResMut<Assets<CustomMaterial>>,
+    mut mat: Query<&mut MeshMaterial3d<CustomMaterial>>,
+    mut imgs: ResMut<Assets<Image>>,
+    time: Res<Time>,
+    kb_input: Res<ButtonInput<KeyCode>>,
+    mb_input: Res<ButtonInput<MouseButton>>,
+    mut evr_motion: EventReader<bevy::input::mouse::MouseMotion>,
+) {
+    let mut cam = cam.single_mut().unwrap();
+    let mat = mat.single_mut().unwrap();
+    let mat = mats.get_mut(&mat.0).unwrap();
+
+    if mb_input.pressed(MouseButton::Left) {
+        let mut delta = Vec2::ZERO;
+        for ev in evr_motion.read() {
+            delta += ev.delta;
+        }
+        if delta != Vec2::ZERO {
+            let sensitivity = vec2(1., -1.) * 0.002;
+
+            let yaw = Quat::from_axis_angle(Vec3::Y, -delta.x * sensitivity.x);
+            let right = Vec3::Y.cross(mat.camera.direction).normalize();
+            let pitch = Quat::from_axis_angle(right, -delta.y * sensitivity.y);
+
+            mat.camera.direction = (yaw * pitch * mat.camera.direction).normalize();
         }
     }
-    dbg!(unsafe{CUBE_COUNT});
 
-    commands.spawn(MaterialMeshBundle {
-        mesh: meshes.add(Cuboid::new(1., 1., 1.)),
-        material: materials.add(Color::srgb_u8(0, 255, 0)),
-        transform: Transform::from_xyz(0., 0., 1.),
-        ..default()
-    });
-    commands.spawn(MaterialMeshBundle {
-        mesh: meshes.add(Cuboid::new(1., 1., 1.)),
-        material: materials.add(Color::srgb_u8(255, 0, 0)),
-        transform: Transform::from_xyz(0., 1., 0.),
-        ..default()
-    });
-    commands.spawn(MaterialMeshBundle {
-        mesh: meshes.add(Cuboid::new(1., 1., 1.)),
-        material: materials.add(Color::srgb_u8(0, 0, 255)),
-        transform: Transform::from_xyz(1., 0., 0.),
-        ..default()
-    });
-    // commands.spawn(PointLightBundle {
-    //     transform: Transform::from_xyz(0., 500., 0.),
-    //     point_light: PointLight { color: Color::WHITE, intensity: 100000., range: 20000., radius: 10000., shadows_enabled: true, ..Default::default() },
-    //     ..Default::default()
-    // });
-}
-fn add_cube(commands: &mut Commands, mesh: Handle<Mesh>, material: Handle<StandardMaterial>, transform: Transform) {
-    unsafe { CUBE_COUNT += 1 };
-    commands.spawn(MaterialMeshBundle {
-        mesh,
-        material,
-        transform,
-        ..Default::default()
-    })
-    // commands.spawn(MaterialMeshletMeshBundle {
-    //     meshlet_mesh: mesh,
-    //     material,
-    //     transform,
-    //     ..Default::default()
-    // })
-    .insert((NotShadowCaster, NotShadowReceiver, ));
+    let mut direction = Vec3::ZERO;
+    let speed = 2.;
 
-}
-fn add_cubes_y(commands: &mut Commands, mesh: Handle<Mesh>, material: Handle<StandardMaterial>, x: f32, z: f32, y_bounds: RangeInclusive<i32>) {
-    let mut transform = Transform::from_translation(Vec3::new(x,*y_bounds.start() as f32,z));
-    transform.scale.y = ((y_bounds.end()+1) - y_bounds.start()) as f32;
-    transform.translation.y += transform.scale.y/2. -0.5;
-    add_cube(commands, mesh.clone(), material.clone(), transform);
-    // for y in y_bounds {
-    //     add_cube(commands, mesh.clone(), material.clone(), Transform::from_translation(Vec3::new(x,y as f32,z)));
-    // }
-}
-
-fn gen_chunk(base_x: i32, base_z: i32, world: &world::World, commands: &mut Commands, mesh: Handle<Mesh>, material: Handle<StandardMaterial>,) {
-    let mut heights = [0i32; CHUNK_SIZE*CHUNK_SIZE];
-    for x in 0..CHUNK_SIZE {
-        for z in 0..CHUNK_SIZE {
-            heights[x*CHUNK_SIZE+z] = world.get_height_at(x as i32+base_x, z as i32+base_z);
-        }
+    if kb_input.pressed(KeyCode::KeyW) {
+        direction += mat.camera.direction;
     }
-    for x in 0..CHUNK_SIZE {
-        for z in 0..CHUNK_SIZE {
-            let current = x*CHUNK_SIZE+z;
-            let iy = heights[current];
-            let fx = (x as i32+base_x) as f32;
-            let fy = iy as f32;
-            let fz = (z as i32+base_z) as f32;
-            let ix = fx as i32;
-            let iz = fz as i32;
-            if z > 0 {
-                add_cubes_y(commands, mesh.clone(), material.clone(), fx, fz-1., if iy > heights[current-1] {
-                    heights[current-1]..=iy
-                } else if iy < heights[current-1] {
-                    iy+1..=heights[current-1]
-                } else {iy..=iy});
-            }
-            if z < CHUNK_SIZE-1 {
-                add_cubes_y(commands, mesh.clone(), material.clone(), fx, fz+1., if iy > heights[current+1] {
-                    heights[current+1]..=iy
-                } else if iy < heights[current+1] {
-                    iy+1..=heights[current+1]
-                } else {iy..=iy});
-            }
-            if x > 0 {
-                add_cubes_y(commands, mesh.clone(), material.clone(), fx-1., fz, if iy > heights[current-CHUNK_SIZE] {
-                    heights[current-CHUNK_SIZE]..=iy
-                } else if iy < heights[current-CHUNK_SIZE] {
-                    iy+1..=heights[current-CHUNK_SIZE]
-                } else {iy..=iy});
-            }
-            if x < CHUNK_SIZE-1 {
-                add_cubes_y(commands, mesh.clone(), material.clone(), fx+1., fz, if iy > heights[current+CHUNK_SIZE] {
-                    heights[current+CHUNK_SIZE]..=iy
-                } else if iy < heights[current+CHUNK_SIZE] {
-                    iy+1..=heights[current+CHUNK_SIZE]
-                } else {iy..=iy});
-            }
-        }
+
+    if kb_input.pressed(KeyCode::KeyS) {
+        direction -= mat.camera.direction;
+    }
+
+    if kb_input.pressed(KeyCode::KeyA) {
+        direction -= mat.camera.direction.cross(Vec3::Y);
+    }
+
+    if kb_input.pressed(KeyCode::KeyD) {
+        direction += mat.camera.direction.cross(Vec3::Y);
+    }
+    if kb_input.pressed(KeyCode::Space) {
+        direction.y += 1.;
+    }
+
+    if kb_input.pressed(KeyCode::ShiftLeft) {
+        direction.y -= 1.;
+    }
+
+    // Progressively update the player's position over time. Normalize the
+    // direction vector to prevent it from exceeding a magnitude of 1 when
+    // moving diagonally.
+    let move_delta = direction.normalize_or_zero() * speed * time.delta_secs();
+    // cam.translation += move_delta.extend(0.);
+
+    mat.camera.center += move_delta;
+}
+
+#[derive(ShaderType)]
+#[repr(C)]
+struct Sphere {
+    pos: Vec3,
+    rad: f32,
+    color: Vec3,
+}
+fn sphere(pos: Vec3, rad: f32, color: Vec3) -> Sphere {
+    Sphere { pos, rad, color }
+}
+#[derive(ShaderType)]
+#[repr(C)]
+struct Box {
+    min: Vec3,
+    max: Vec3,
+    color: Vec3,
+}
+fn new_box(min: Vec3, max: Vec3, color: Vec3) -> Box {
+    Box { min, max, color }
+}
+
+#[repr(C)]
+#[derive(ShaderType, Debug, Clone)]
+struct FragCamera {
+    center: Vec3,
+    direction: Vec3,
+    fov: f32,
+}
+
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+struct CustomMaterial {
+    #[storage(2, read_only)]
+    spheres: Handle<bevy::render::storage::ShaderStorageBuffer>,
+    #[storage(3, read_only)]
+    boxes: Handle<bevy::render::storage::ShaderStorageBuffer>,
+
+    #[uniform(1)]
+    camera: FragCamera,
+
+    #[texture(4, dimension = "2d_array")]
+    #[sampler(5)]
+    atlas: Handle<Image>,
+
+    #[uniform(100)]
+    image_dimensions: Vec2,
+}
+
+impl Material for CustomMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/raytrace.wgsl".into()
     }
 }
-
-
-#[derive(Component)]
-pub struct Chunk;
-
-
-
-// let mut positions = Vec::new();
-// let mut indices = Vec::new();
-// let mut normals = Vec::new();
-// let mut id = 0;
-// for x in 0..16 {
-//     for z in 0..16 {
-//         let bx = x as f32;
-//         let by = heights[id];
-//         let bz = z as f32;
-//         positions.append(&mut vec![
-//             [bx, by, bz],
-//             [bx+1., by, bz],
-//             [bx+1., by, bz+1.],
-//             [bx, by, bz+1.],
-//         ]);
-//         let vid = id as u16*4;
-//         // Top corner
-//         indices.append(&mut vec![
-//             vid+0, vid+1, vid+2, 
-//             vid+0, vid+2, vid+3,
-//         ]);
-//         normals.append(&mut vec![
-//             [0., 1., 0.],
-//             [0., 1., 0.],
-//             [0., 1., 0.],
-//             [0., 1., 0.],
-//         ]);
-//         // Check neighboring blocks and generate additional faces
-//         if bx > 0. && heights[id-16] < by { // Left face (x-1)
-//             indices.append(&mut vec![
-//                 vid-16*4, vid-16*4+3, vid+0,
-//                 vid-16*4+3, vid+3, vid+0,
-//             ]);
-//             normals.append(&mut vec![
-//                 [-1., 0., 0.],
-//                 [-1., 0., 0.],
-//                 [-1., 0., 0.],
-//                 [-1., 0., 0.],
-//             ]);
-//         }
-//         if bx < 15. && heights[id+16] < by { // Right face (x+1)
-//             indices.append(&mut vec![
-//                 vid+1, vid+2, vid+16*4+1,
-//                 vid+2, vid+16*4+2, vid+16*4+1,
-//             ]);
-//             normals.append(&mut vec![
-//                 [1., 0., 0.],
-//                 [1., 0., 0.],
-//                 [1., 0., 0.],
-//                 [1., 0., 0.],
-//             ]);
-//         }
-//         if bz > 0. && heights[id-1] < by { // Front face (z-1)
-//             indices.append(&mut vec![
-//                 vid-1*4+3, vid-1*4+2, vid+0,
-//                 vid-1*4+2, vid+1, vid+0,
-//             ]);
-//             normals.append(&mut vec![
-//                 [0., 0., -1.],
-//                 [0., 0., -1.],
-//                 [0., 0., -1.],
-//                 [0., 0., -1.],
-//             ]);
-//         }
-//         if bz < 15. && heights[id+1] < by { // Back face (z+1)
-//             indices.append(&mut vec![
-//                 vid+2, vid+3, vid+1*4+2,
-//                 vid+3, vid+1*4+3, vid+1*4+2,
-//             ]);
-//             normals.append(&mut vec![
-//                 [0., 0., 1.],
-//                 [0., 0., 1.],
-//                 [0., 0., 1.],
-//                 [0., 0., 1.],
-//             ]);
-//         }
-
-//         // if id<heights.len()-1 && heights[id+1] < by {
-//         //     indices.append(&mut vec![
-//         //         vid+4, vid+6, vid+2, 
-//         //         vid+4, vid+5, vid+3,
-//         //     ]);
-//         // }
-//         // if id>16 && heights[id-16] < by {
-//         //     indices.append(&mut vec![
-//         //         vid-4-CHUNK_SIZE, vid-3-CHUNK_SIZE, vid+2, 
-//         //         vid-4-CHUNK_SIZE, vid-2-CHUNK_SIZE, vid+3,
-//         //     ]);
-//         // }
-//         // if id<heights.len()-16 && heights[id+16] < by {
-//         //     indices.append(&mut vec![
-//         //         vid+4+CHUNK_SIZE, vid+3+CHUNK_SIZE, vid+2, 
-//         //         vid+4+CHUNK_SIZE, vid+2+CHUNK_SIZE, vid+3,
-//         //     ]);
-//         // }
-//         id += 1;
-//     }
-// }
-// let mut mesh = Mesh::new(bevy::render::mesh::PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-// mesh = mesh.with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-// // vec![
-// // [0., 1., 0.],
-// // [0., 1., 0.],
-// // [0., 1., 0.],
-// // [0., 1., 0.],
-// // ]
-// // );
-// mesh = mesh.with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-// mesh = mesh.with_inserted_indices(Indices::U16(indices));
-// // mesh = mesh.with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![
-// //     [0.0, 1.0], [0.5, 0.0], [1.0, 0.0], [0.5, 1.0]
-// // ]);

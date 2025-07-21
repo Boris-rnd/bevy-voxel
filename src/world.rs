@@ -1,6 +1,7 @@
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::render::RenderApp;
-use bevy::utils::hashbrown::HashMap;
+// use bevy::utils::hashbrown::HashMap;
 use noise::Perlin;
 
 #[derive(Resource)]
