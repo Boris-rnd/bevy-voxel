@@ -196,21 +196,20 @@ fn hit(ray: Ray) -> HitRecordResult {
     }
     i = 0;
     while i < u32(arrayLength(&boxes)) {
-        let r = hit_box_gen(ray, 0.001, closest_so_far, boxes[i]);
-        if (r.valid && r.rec.t < closest_so_far) {
+        let r = hit_box_gen(ray, boxes[i]);
+        if (r.valid && r.rec.t < closest_so_far && r.rec.t > 0.001) {
             temp_rec = r;
             closest_so_far = r.rec.t;
-            break;
         }
         i++;
     }
     return temp_rec;
 }
 
-fn hit_box_gen(ray: Ray, ray_tmin: f32, ray_tmax: f32, box: Box) -> HitRecordResult {
+fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
     let rt = box.min;
     let lb = box.max;
-    let inv_dir = 1./ray.dir;
+
     let t135 = (lb-ray.orig)/ray.dir;
     let t246 = (rt-ray.orig)/ray.dir;
 
@@ -270,8 +269,8 @@ fn hit_box_gen(ray: Ray, ray_tmin: f32, ray_tmax: f32, box: Box) -> HitRecordRes
         }
         res.rec.normal = circle_normal;
         res.rec.t = t;
-        res.rec.front_face = true;
-        res.rec.color = textureSample(base_color_texture, base_color_sampler, (uv*2.)+vec2(0.5), layer).xyz;
+        res.rec.front_face = false;
+        res.rec.color = textureSample(base_color_texture, base_color_sampler, (uv)+vec2(0.5), layer).xyz;
     }
     return res;
 }
@@ -318,7 +317,7 @@ fn ray_color(ray2: Ray) -> vec3<f32> {
     let a = 0.5*(unit_direction.y + 1.0);
     var c = (1.0-a)*vec3(1.0, 1.0, 1.0) + a*vec3(0.5, 0.7, 1.0);
 
-    for (var i =1;i<30;i+=10) {
+    for (var i =1;i<300;i+=10) {
         var res = hit(ray);
         if (res.valid) {
             var direction = res.rec.normal + random_unit_vector()*0.5;
@@ -327,7 +326,7 @@ fn ray_color(ray2: Ray) -> vec3<f32> {
             c = c*res.rec.color;//*(1./f32(i));
             
             ray = Ray(res.rec.p, direction);
-            // return direction;
+            return c;
         } else {
             return c;
         }
@@ -373,7 +372,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let focus = false;
     
-    let samples_per_pixel = 20;
+    let samples_per_pixel = 3;
     var c = vec3(0.);
     rng_seed = globals.time+(in.uv.x+in.uv.y*10.);
     for (var s=0;s<samples_per_pixel;s++) {

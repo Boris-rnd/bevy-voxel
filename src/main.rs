@@ -47,17 +47,18 @@ fn setup(
     let trans = Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y);
 
     let spheres = &[
-        sphere(vec3(0., 0., -1.2), 0.5, vec3(0.1, 0.2, 0.5)),
+        sphere(vec3(0., 1., -1.2), 0.5, vec3(0.1, 0.2, 0.5)),
         // sphere(vec3(-1., 0., -1.), 0.5, vec3(0.8, 0.8, 0.8)),
         // sphere(vec3(1., 0., -1.), 0.5, vec3(0.8, 0.8, 0.8)),
         // sphere(vec3(0., -100.5, -1.), 100., vec3(0.8, 0.6, 0.2)),
     ];
     let spheres_buffer = buffers.add(bevy::render::storage::ShaderStorageBuffer::from(spheres));
-    let boxes = &[new_box(
-        vec3(-3., 0., -1.),
-        vec3(-2.5, -0.5, -1.5),
-        vec3(0.8, 0.9, 0.9),
-    )];
+    let mut boxes = vec![];
+    for x in -5..5 {
+        for z in -5..5 {
+            boxes.push(new_voxel(vec3(x as _, 0., z as _)));
+        }
+    }
     let boxes_buffer = buffers.add(bevy::render::storage::ShaderStorageBuffer::from(boxes));
     let center = vec3(0., 0., 0.);
 
@@ -193,6 +194,9 @@ struct Box {
 }
 fn new_box(min: Vec3, max: Vec3, color: Vec3) -> Box {
     Box { min, max, color }
+}
+fn new_voxel(pos: Vec3) -> Box {
+    new_box(pos-vec3(0.5, 0.5, 0.5), pos+vec3(0.5, 0.5, 0.5), vec3(1., 1., 1.))
 }
 
 #[repr(C)]
