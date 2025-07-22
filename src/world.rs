@@ -1,60 +1,45 @@
-use bevy::platform::collections::HashMap;
-use bevy::prelude::*;
-use bevy::render::RenderApp;
-// use bevy::utils::hashbrown::HashMap;
-use noise::Perlin;
+use bevy::{prelude::*, render::render_resource::ShaderType};
 
-#[derive(Resource)]
-pub struct World {
-    generator: Perlin,
-    diff: HashMap<IVec3, Tower>,
+#[derive(ShaderType)]
+#[repr(C)]
+pub struct Sphere {
+    pos: Vec3,
+    rad: f32,
+    color: Vec3,
 }
-impl World {
-    pub fn new(seed: u32) -> Self {
-        Self {
-            generator: Perlin::new(seed),
-            diff: HashMap::default(),
-        }
-    }
-    pub fn get_at(&self, coords: &IVec3) -> Tower {
-        match self.diff.get(coords) {
-            Some(tower) => *tower,
-            None => {
-                if coords.y <= self.get_height_at(coords.x, coords.y) {
-                    Tower::Grass
-                } else {Tower::Empty}
-            },
-        }
-    }
-    pub fn get_height_at(&self, x: i32, z: i32) -> i32 {
-        (noise::NoiseFn::get(&self.generator, [x as f64/CHUNK_SIZED, z as f64/CHUNK_SIZED]) as f32*5.).round() as _
-    }
+pub fn sphere(pos: Vec3, rad: f32, color: Vec3) -> Sphere {
+    Sphere { pos, rad, color }
+}
+#[derive(ShaderType)]
+#[repr(C)]
+pub struct Box {
+    min: Vec3,
+    max: Vec3,
+    color: Vec3,
+}
+pub fn new_box(min: Vec3, max: Vec3, color: Vec3) -> Box {
+    Box { min, max, color }
+}
+pub fn new_voxel(pos: Vec3) -> Box {
+    new_box(pos-vec3(0.5, 0.5, 0.5), pos+vec3(0.5, 0.5, 0.5), vec3(1., 1., 1.))
 }
 
-pub const CHUNK_SIZE: usize = 32;
-pub const CHUNK_SIZEI: i32 = CHUNK_SIZE as _;
-pub const CHUNK_SIZED: f64 = CHUNK_SIZE as _;
 
 
-#[derive(Debug, Clone, Copy, PartialEq, Hash)]
-pub enum Tower {
-    Empty,
-    Dirt,
-    Grass,
+#[derive(ShaderType)]
+#[repr(C)]
+pub struct Voxel {
+    pos: Vec3,
+    texture_id: u32,
+}
+#[derive(ShaderType)]
+#[repr(C)]
+pub struct VoxelChunk {
+    pos: Vec3,
+    inner1: u32,
+    inner2: u32
+}
+pub fn voxel_chunk(pos: Vec3, voxels: u64) -> VoxelChunk {
+    VoxelChunk { pos, inner2: (voxels&u32::MAX as u64) as u32, inner1: (voxels>>32) as u32 }
 }
 
-// impl std::hash::Hash for IVec3 {
-//     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-//         self.x.hash(state);
-//         self.y.hash(state);
-//         self.z.hash(state);
-//     }
-// }
-
-pub struct WorldPlugin {}
-impl Plugin for WorldPlugin {
-    fn build(&self, app: &mut App) {
-        let render = app.sub_app_mut(RenderApp);
-        
-    }
-}

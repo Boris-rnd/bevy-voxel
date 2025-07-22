@@ -7,6 +7,8 @@
 @group(2) @binding(1) var<uniform> cam: Camera;
 @group(2) @binding(2) var<storage, read> spheres: array<Sphere>;
 @group(2) @binding(3) var<storage, read> boxes: array<Box>;
+@group(2) @binding(6) var<storage, read> voxels: array<Voxel>;
+@group(2) @binding(7) var<storage, read> voxel_chunks: array<VoxelChunk>;
 @group(2) @binding(4) var base_color_texture: texture_2d_array<f32>;
 @group(2) @binding(5) var base_color_sampler: sampler;
 
@@ -27,6 +29,14 @@ struct Sphere {
 struct Ray {
     orig: vec3<f32>,
     dir: vec3<f32>,
+}
+struct VoxelChunk {
+    pos: vec3<f32>,
+    inner: u64,
+}
+struct Voxel {
+    pos: vec3<f32>,
+    texture_id: u32,
 }
 struct HitRecord {
     p: vec3<f32>,
@@ -203,6 +213,15 @@ fn hit(ray: Ray) -> HitRecordResult {
         }
         i++;
     }
+    i = 0;
+    while i < u32(arrayLength(&voxel_chunks)) {
+        let r = hit_chunk_gen(ray, voxel_chunks[i]);
+        if (r.valid && r.rec.t < closest_so_far && r.rec.t > 0.001) {
+            temp_rec = r;
+            closest_so_far = r.rec.t;
+        }
+        i++;
+    }
     return temp_rec;
 }
 
@@ -274,6 +293,68 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
     }
     return res;
 }
+fn hit_chunk_gen(ray: Ray, chunk: VoxelChunk) -> HitRecordResult {
+    let box = Box(chunk.pos*4, chunk.pos*4.+vec3(4.), vec3(0.));
+    let rt = box.min;
+    let lb = box.max;
+
+    let t135 = (lb-ray.orig)/ray.dir;
+    let t246 = (rt-ray.orig)/ray.dir;
+
+    let tmin = max(max(min(t135.x, t246.x), min(t135.y, t246.y)), min(t135.z, t246.z));
+    let tmax = min(min(max(t135.x, t246.x), max(t135.y, t246.y)), max(t135.z, t246.z));
+    
+    var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
+
+    var t: f32;
+    // if tmax < 0, ray (line) is intersecting AABB, but the whole AABB is behind us
+    // if (tmax < 0) {
+    //     t = tmax;
+    //     c = vec3(1., 0., 0.);
+    // }
+    // if tmin > tmax, ray doesn't intersect AABB
+    if (tmin > tmax || tmax<0) {
+        t = tmax;
+    } else {
+        t = tmin;
+        let start_pos = (at(ray, t)-(box.min));
+        let step_size = 0.01;
+        let approx_t_end = t+6.1; // Diagonal is 4*sqrt(2)
+        res.rec.t = t;
+        if round(start_pos.x)>4. || round(start_pos.y)>4. || round(start_pos.z)>4. || round(start_pos.x)<0. || round(start_pos.y)<0. || round(start_pos.z)<0. {
+            res.valid = true;
+            res.rec.color = vec3(start_pos);
+            return res;
+        }
+
+        for (var t=t+0.01;t<approx_t_end;t=t+step_size) {
+            let pos = at(ray,t)-(box.min);
+            if floor(pos.x)>=4. || floor(pos.y)>=4. || floor(pos.z)>=4. || floor(pos.x)<0. || floor(pos.y)<0. || floor(pos.z)<0. {break;}
+            var idx = u32(floor(pos.x))+u32(floor(pos.y))*4+u32(floor(pos.z))*16;
+            var mask: u32;
+            if (idx<32) {
+                mask = u32(chunk.inner&0xFFFFFFFF);
+            } else {
+                mask = u32(chunk.inner>>32);
+                idx = idx-32;
+            }
+            let m = (mask >> idx) & u32(1);
+            if (m==1) {
+                res.valid = true;
+                res.rec.normal = vec3(0.);
+                res.rec.t = t;
+                res.rec.color = pos;
+
+                // ray.orig = ;
+                // return res;
+                let bp = vec3(floor(pos.x), floor(pos.y), floor(pos.z));
+                return hit_box_gen(ray, Box(bp+box.min-vec3(0.0),bp+box.min+vec3(1.), vec3(0.)));
+            }
+            // break;
+        }
+    }
+    return res;
+}
 
 fn hit_sphere_gen(ray: Ray, ray_tmin: f32, ray_tmax: f32, sphere: Sphere) -> HitRecordResult {
     var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
@@ -317,7 +398,7 @@ fn ray_color(ray2: Ray) -> vec3<f32> {
     let a = 0.5*(unit_direction.y + 1.0);
     var c = (1.0-a)*vec3(1.0, 1.0, 1.0) + a*vec3(0.5, 0.7, 1.0);
 
-    for (var i =1;i<300;i+=10) {
+    for (var i =1;i<200;i+=10) {
         var res = hit(ray);
         if (res.valid) {
             var direction = res.rec.normal + random_unit_vector()*0.5;
@@ -372,14 +453,19 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let focus = false;
     
-    let samples_per_pixel = 3;
+    let samples_per_pixel = 2;
+    var antialiasing = false;
+    if samples_per_pixel>1 {antialiasing=true;}
     var c = vec3(0.);
     rng_seed = globals.time+(in.uv.x+in.uv.y*10.);
     for (var s=0;s<samples_per_pixel;s++) {
-        let offset_x = rand(-0.5, 0.5);
-        let offset_y = rand(-0.5, 0.5);
-        let offset = vec3(offset_x, offset_y, 0.);
-        let pixel_center = pixel00_loc + ((i+offset_x) * pixel_delta_u) + ((j+offset_y) * pixel_delta_v);
+        var offset = vec3(0.);
+        if samples_per_pixel>1 {
+            let offset_x = rand(-0.5, 0.5);
+            let offset_y = rand(-0.5, 0.5);
+            offset = vec3(offset_x, offset_y, 0.);
+        }
+        let pixel_center = pixel00_loc + ((i+offset.x) * pixel_delta_u) + ((j+offset.y) * pixel_delta_v);
         var orig = lookfrom;
         if (focus) {
             let p = random_in_unit_disk();

@@ -1,12 +1,11 @@
 #![allow(unused_imports, dead_code)]
-pub static mut CUBE_COUNT: usize = 0;
 use std::ops::RangeInclusive;
 
 use bevy::{
     asset::RenderAssetUsages, pbr::{NotShadowCaster, NotShadowReceiver}, prelude::*, render::{batching::NoAutomaticBatching, render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat}, view::NoFrustumCulling}
 };
 use noise::{NoiseFn, Perlin};
-use world::{CHUNK_SIZE, CHUNK_SIZEI};
+use world::*;
 
 pub mod build;
 pub mod camera;
@@ -53,12 +52,22 @@ fn setup(
         // sphere(vec3(0., -100.5, -1.), 100., vec3(0.8, 0.6, 0.2)),
     ];
     let spheres_buffer = buffers.add(bevy::render::storage::ShaderStorageBuffer::from(spheres));
-    let mut boxes = vec![];
+    let mut boxes: Vec<world::Box> = vec![];
+    let mut voxels: Vec<world::Voxel> = vec![];
+    let mut voxel_chunks = vec![];
     for x in -5..5 {
         for z in -5..5 {
-            boxes.push(new_voxel(vec3(x as _, 0., z as _)));
+            voxel_chunks.push(voxel_chunk(vec3(x as _, 0., z as _), 0b100101010000000011111000001011111000000100001110001));
         }
     }
+    // for x in -5..5 {
+    //     for z in -5..5 {
+    //         voxels.push(Voxel {
+    //             pos: todo!(),
+    //             texture_id: todo!(),
+    //         });
+    //     }
+    // }
     let boxes_buffer = buffers.add(bevy::render::storage::ShaderStorageBuffer::from(boxes));
     let center = vec3(0., 0., 0.);
 
@@ -99,6 +108,8 @@ fn setup(
             },
             boxes: boxes_buffer,
             atlas: atlas_handle,
+            voxels: buffers.add(bevy::render::storage::ShaderStorageBuffer::from(voxels)),
+            voxel_chunks: buffers.add(bevy::render::storage::ShaderStorageBuffer::from(voxel_chunks)),
         })),
         Transform::from_xyz(0.0, 0.0, 0.0),
     ));
@@ -141,7 +152,7 @@ fn update(
     }
 
     let mut direction = Vec3::ZERO;
-    let speed = 2.;
+    let speed = 4.;
 
     if kb_input.pressed(KeyCode::KeyW) {
         direction += mat.camera.direction;
@@ -158,6 +169,7 @@ fn update(
     if kb_input.pressed(KeyCode::KeyD) {
         direction += mat.camera.direction.cross(Vec3::Y);
     }
+    direction = vec3(direction.x,0.,direction.z);
     if kb_input.pressed(KeyCode::Space) {
         direction.y += 1.;
     }
@@ -175,29 +187,6 @@ fn update(
     mat.camera.center += move_delta;
 }
 
-#[derive(ShaderType)]
-#[repr(C)]
-struct Sphere {
-    pos: Vec3,
-    rad: f32,
-    color: Vec3,
-}
-fn sphere(pos: Vec3, rad: f32, color: Vec3) -> Sphere {
-    Sphere { pos, rad, color }
-}
-#[derive(ShaderType)]
-#[repr(C)]
-struct Box {
-    min: Vec3,
-    max: Vec3,
-    color: Vec3,
-}
-fn new_box(min: Vec3, max: Vec3, color: Vec3) -> Box {
-    Box { min, max, color }
-}
-fn new_voxel(pos: Vec3) -> Box {
-    new_box(pos-vec3(0.5, 0.5, 0.5), pos+vec3(0.5, 0.5, 0.5), vec3(1., 1., 1.))
-}
 
 #[repr(C)]
 #[derive(ShaderType, Debug, Clone)]
@@ -213,6 +202,11 @@ struct CustomMaterial {
     spheres: Handle<bevy::render::storage::ShaderStorageBuffer>,
     #[storage(3, read_only)]
     boxes: Handle<bevy::render::storage::ShaderStorageBuffer>,
+    #[storage(6, read_only)]
+    voxels: Handle<bevy::render::storage::ShaderStorageBuffer>,
+    #[storage(7, read_only)]
+    voxel_chunks: Handle<bevy::render::storage::ShaderStorageBuffer>,
+
 
     #[uniform(1)]
     camera: FragCamera,
