@@ -36,10 +36,14 @@ pub struct Voxel {
 #[repr(C)]
 pub struct VoxelChunk {
     pos: Vec3,
-    inner1: u32,
-    inner2: u32
+    inner: [u32; 2],
+    prefix_in_block_data_array: u32,
 }
 pub fn voxel_chunk(pos: Vec3, voxels: u64) -> VoxelChunk {
-    VoxelChunk { pos, inner2: (voxels&u32::MAX as u64) as u32, inner1: (voxels>>32) as u32 }
+    VoxelChunk { pos, inner: [(voxels&u32::MAX as u64) as u32, (voxels>>32) as u32], prefix_in_block_data_array: 0 }
 }
 
+#[derive(ShaderType)]
+pub struct BlockData {
+    layer: u32
+}

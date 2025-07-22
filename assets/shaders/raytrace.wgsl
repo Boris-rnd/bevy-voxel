@@ -9,6 +9,7 @@
 @group(2) @binding(3) var<storage, read> boxes: array<Box>;
 @group(2) @binding(6) var<storage, read> voxels: array<Voxel>;
 @group(2) @binding(7) var<storage, read> voxel_chunks: array<VoxelChunk>;
+@group(2) @binding(8) var<storage, read> block_data: array<BlockData>;
 @group(2) @binding(4) var base_color_texture: texture_2d_array<f32>;
 @group(2) @binding(5) var base_color_sampler: sampler;
 
@@ -33,6 +34,7 @@ struct Ray {
 struct VoxelChunk {
     pos: vec3<f32>,
     inner: u64,
+    prefix_in_block_data_array: u32,
 }
 struct Voxel {
     pos: vec3<f32>,
@@ -51,11 +53,15 @@ fn at(ray: Ray, t: f32) -> vec3<f32> {
     return ray.orig + t*ray.dir;
 }
 
+struct BlockData {
+    layer: u32,
+}
+
 
 struct Box {
     min: vec3<f32>,
     max: vec3<f32>,
-    color: vec3<f32>,
+    texture_id: u32,
 }
 
 fn degrees_to_radians(deg: f32) -> f32 {
@@ -254,7 +260,7 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
         var circle_normal = center-res.rec.p;
         
         var uv: vec2<f32>;
-        var layer: u32;
+        var layer: u32 = box.texture_id;
         if circle_normal.x > abs(circle_normal.y) && circle_normal.x > abs(circle_normal.z) {
             uv = (circle_normal).zy;
             circle_normal = vec3(1., 0., 0.);
@@ -294,7 +300,7 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
     return res;
 }
 fn hit_chunk_gen(ray: Ray, chunk: VoxelChunk) -> HitRecordResult {
-    let box = Box(chunk.pos*4, chunk.pos*4.+vec3(4.), vec3(0.));
+    let box = Box(chunk.pos*4, chunk.pos*4.+vec3(4.), 0);
     let rt = box.min;
     let lb = box.max;
 
@@ -329,32 +335,72 @@ fn hit_chunk_gen(ray: Ray, chunk: VoxelChunk) -> HitRecordResult {
 
         for (var t=t+0.01;t<approx_t_end;t=t+step_size) {
             let pos = at(ray,t)-(box.min);
-            if floor(pos.x)>=4. || floor(pos.y)>=4. || floor(pos.z)>=4. || floor(pos.x)<0. || floor(pos.y)<0. || floor(pos.z)<0. {break;}
-            var idx = u32(floor(pos.x))+u32(floor(pos.y))*4+u32(floor(pos.z))*16;
-            var mask: u32;
-            if (idx<32) {
-                mask = u32(chunk.inner&0xFFFFFFFF);
-            } else {
-                mask = u32(chunk.inner>>32);
-                idx = idx-32;
+            if floor(pos.x)>=4. || floor(pos.y)>=4. || floor(pos.z)>=4. || floor(pos.x)<0. || floor(pos.y)<0. || floor(pos.z)<0. {
+                break;
             }
-            let m = (mask >> idx) & u32(1);
-            if (m==1) {
-                res.valid = true;
-                res.rec.normal = vec3(0.);
-                res.rec.t = t;
-                res.rec.color = pos;
-
-                // ray.orig = ;
-                // return res;
-                let bp = vec3(floor(pos.x), floor(pos.y), floor(pos.z));
-                return hit_box_gen(ray, Box(bp+box.min-vec3(0.0),bp+box.min+vec3(1.), vec3(0.)));
+            let bp = vec3(floor(pos.x), floor(pos.y), floor(pos.z));
+            let real_box = Box(bp+box.min-vec3(0.0),bp+box.min+vec3(1.), 0);
+            var res = box_hit(ray, pos, chunk, real_box);
+            if res.valid {
+                return res;
             }
-            // break;
+            // res = box_hit(ray, vec3(pos.x+1,pos.y,pos.z), chunk, real_box);
+            // if res.valid {
+            //     return res;
+            // }
+            // res = box_hit(ray, vec3(pos.x-1,pos.y,pos.z), chunk, real_box);
+            // if res.valid {
+            //     return res;
+            // }
+            // res = box_hit(ray, vec3(pos.x,pos.y+1,pos.z), chunk, real_box);
+            // if res.valid {
+            //     return res;
+            // }
+            // res = box_hit(ray, vec3(pos.x,pos.y-1,pos.z), chunk, real_box);
+            // if res.valid {
+            //     return res;
+            // }
+            
+            // res = box_hit(ray, vec3(pos.x,pos.y,pos.z+1), chunk, real_box);
+            // if res.valid {
+            //     return res;
+            // }
+            // res = box_hit(ray, vec3(pos.x,pos.y,pos.z-1), chunk, real_box);
+            // if res.valid {
+            //     return res;
+            // }
         }
     }
     return res;
 }
+
+fn box_hit(ray: Ray, pos: vec3<f32>, chunk: VoxelChunk, box: Box) -> HitRecordResult {
+    var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
+    
+    
+    var idx = u32(floor(pos.x))+u32(floor(pos.y))*4+u32(floor(pos.z))*16;
+    var mask: u32;
+    if (idx<32) {
+        mask = u32(chunk.inner&0xFFFFFFFF);
+    } else {
+        mask = u32(chunk.inner>>32);
+        idx = idx-32;
+    }
+    let m = (mask >> idx) & u32(1);
+    if (m==1) {
+        // res.valid = true;
+        // res.rec.normal = vec3(0.);
+        // res.rec.t = t;
+        // res.rec.color = pos;
+
+        // ray.orig = ;
+        // return res;
+        // let bp = vec3(floor(pos.x), floor(pos.y), floor(pos.z));
+        return hit_box_gen(ray, box);
+    }
+    return res;
+}
+
 
 fn hit_sphere_gen(ray: Ray, ray_tmin: f32, ray_tmax: f32, sphere: Sphere) -> HitRecordResult {
     var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));

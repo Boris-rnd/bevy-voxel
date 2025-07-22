@@ -55,19 +55,13 @@ fn setup(
     let mut boxes: Vec<world::Box> = vec![];
     let mut voxels: Vec<world::Voxel> = vec![];
     let mut voxel_chunks = vec![];
+    let mut block_data: Vec<BlockData> = vec![];
+
     for x in -5..5 {
         for z in -5..5 {
             voxel_chunks.push(voxel_chunk(vec3(x as _, 0., z as _), 0b100101010000000011111000001011111000000100001110001));
         }
     }
-    // for x in -5..5 {
-    //     for z in -5..5 {
-    //         voxels.push(Voxel {
-    //             pos: todo!(),
-    //             texture_id: todo!(),
-    //         });
-    //     }
-    // }
     let boxes_buffer = buffers.add(bevy::render::storage::ShaderStorageBuffer::from(boxes));
     let center = vec3(0., 0., 0.);
 
@@ -110,6 +104,7 @@ fn setup(
             atlas: atlas_handle,
             voxels: buffers.add(bevy::render::storage::ShaderStorageBuffer::from(voxels)),
             voxel_chunks: buffers.add(bevy::render::storage::ShaderStorageBuffer::from(voxel_chunks)),
+            block_data: buffers.add(bevy::render::storage::ShaderStorageBuffer::from(block_data)),
         })),
         Transform::from_xyz(0.0, 0.0, 0.0),
     ));
@@ -206,6 +201,8 @@ struct CustomMaterial {
     voxels: Handle<bevy::render::storage::ShaderStorageBuffer>,
     #[storage(7, read_only)]
     voxel_chunks: Handle<bevy::render::storage::ShaderStorageBuffer>,
+    #[storage(8, read_only)]
+    block_data: Handle<bevy::render::storage::ShaderStorageBuffer>,
 
 
     #[uniform(1)]
