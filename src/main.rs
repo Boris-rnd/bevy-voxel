@@ -58,8 +58,10 @@ fn setup(
     let mut block_data: Vec<BlockData> = vec![];
 
     for x in -5..5 {
-        for z in -5..5 {
-            voxel_chunks.push(voxel_chunk(vec3(x as _, 0., z as _), 0b100101010000000011111000001011111000000100001110001));
+        for y in -5..5 {
+            for z in -5..5 {
+                voxel_chunks.push(voxel_chunk(vec3(x as _, y as _, z as _), 0));
+            }
         }
     }
     let boxes_buffer = buffers.add(bevy::render::storage::ShaderStorageBuffer::from(boxes));

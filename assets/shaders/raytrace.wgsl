@@ -191,6 +191,20 @@ fn set_face_normal(ray: Ray, outward_normal: vec3<f32>, r: HitRecord) -> HitReco
     return rec;
 }
 
+fn cmple(v1: vec3<f32>, v2: vec3<f32>) -> vec3<bool> {
+    return vec3(v1.x <= v2.x,v1.y <= v2.y,v1.z <= v2.z);
+}
+fn cmple_to_unit(v1: vec3<f32>, v2: vec3<f32>) -> vec3<f32> {
+    var v = vec3(0.);
+    if v1.x<=v2.x {v.x=1.;}
+    if v1.y<=v2.y {v.y=1.;}
+    if v1.z<=v2.z {v.z=1.;}
+    return v;
+}
+// fn cmple(v1: vec3<i32>, v2: vec3<i32>) -> vec3<bool> {
+//     return vec3(v1.x <= v2.x,v1.y <= v2.y,v1.z <= v2.z);
+// }
+
 
 // No tuples
 struct HitRecordResult {
@@ -298,6 +312,8 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
         res.rec.color = textureSample(base_color_texture, base_color_sampler, (uv)+vec2(0.5), layer).xyz;
     }
     return res;
+}fn fastFloor(v: vec3<f32>) -> vec3<i32> {
+    return vec3<i32>(select(v - 1.0, v, fract(v) >= vec3<f32>(0.0)));
 }
 fn hit_chunk_gen(ray: Ray, chunk: VoxelChunk) -> HitRecordResult {
     let box = Box(chunk.pos*4, chunk.pos*4.+vec3(4.), 0);
@@ -323,58 +339,78 @@ fn hit_chunk_gen(ray: Ray, chunk: VoxelChunk) -> HitRecordResult {
         t = tmax;
     } else {
         t = tmin;
-        let start_pos = (at(ray, t)-(box.min));
-        let step_size = 0.01;
-        let approx_t_end = t+6.1; // Diagonal is 4*sqrt(2)
+        let use_branchless_dda = true;
+        res.valid = true;
         res.rec.t = t;
-        if round(start_pos.x)>4. || round(start_pos.y)>4. || round(start_pos.z)>4. || round(start_pos.x)<0. || round(start_pos.y)<0. || round(start_pos.z)<0. {
-            res.valid = true;
-            res.rec.color = vec3(start_pos);
-            return res;
-        }
+        
+        let rayPos = at(ray, t-0.00001)-box.min;
+        var mapPos = vec3<i32>(floor(rayPos));
+        let deltaDist = abs(1. / ray.dir);
+        let rayStep = vec3<i32>(sign(ray.dir)); let f = fract(rayPos);
 
-        for (var t=t+0.01;t<approx_t_end;t=t+step_size) {
-            let pos = at(ray,t)-(box.min);
-            if floor(pos.x)>=4. || floor(pos.y)>=4. || floor(pos.z)>=4. || floor(pos.x)<0. || floor(pos.y)<0. || floor(pos.z)<0. {
+    // Distance if ray direction is positive
+    let sideDist_pos = (1.0 - f) * deltaDist;
+    // Distance if ray direction is negative
+    let sideDist_neg = f * deltaDist;
+
+    // Use select to pick the correct one based on direction, this is branchless
+    var sideDist = select(sideDist_pos, sideDist_neg, rayStep < vec3<i32>(0));
+        // var sideDist = (sign(ray.dir) * (vec3<f32>(mapPos) - rayPos) + (sign(ray.dir) * 0.5) + 0.5) * deltaDist; 
+
+        var mask = vec3(0.);
+
+        for (var i=0;i<16;i++) {
+            if use_branchless_dda {
+                mask = cmple_to_unit(sideDist.xyz, min(sideDist.yzx, sideDist.zxy));
+                sideDist += vec3(mask) * deltaDist;
+                mapPos += vec3<i32>(vec3(mask)) * rayStep;
+            } else {
+                if (sideDist.x < sideDist.y) {
+                    if (sideDist.x < sideDist.z) {
+                        sideDist.x += deltaDist.x;
+                        mapPos.x += rayStep.x;
+                        mask = vec3(1., 0., 0.);
+                    }
+                    else {
+                        sideDist.z += deltaDist.z;
+                        mapPos.z += rayStep.z;
+                        mask = vec3(0., 0., 1.);
+                    }
+                }
+                else {
+                    if (sideDist.y < sideDist.z) {
+                        sideDist.y += deltaDist.y;
+                        mapPos.y += rayStep.y;
+                        mask = vec3(0., 1., 0.);
+                    }
+                    else {
+                        sideDist.z += deltaDist.z;
+                        mapPos.z += rayStep.z;
+                        mask = vec3(0., 0., 1.);
+                    }
+                }
+            }
+            let pos = vec3<f32>(mapPos);
+            if floor(pos.x)<0. || floor(pos.y)<0. || floor(pos.z)<0. ||
+            floor(pos.x)>=4. || floor(pos.y)>=4. || floor(pos.z)>=4. {
                 break;
             }
+            // res.rec.color = pos;
+            // return res;
             let bp = vec3(floor(pos.x), floor(pos.y), floor(pos.z));
             let real_box = Box(bp+box.min-vec3(0.0),bp+box.min+vec3(1.), 0);
-            var res = box_hit(ray, pos, chunk, real_box);
+            var res = box_hit(ray, pos, chunk, real_box, t);
             if res.valid {
                 return res;
             }
-            // res = box_hit(ray, vec3(pos.x+1,pos.y,pos.z), chunk, real_box);
-            // if res.valid {
-            //     return res;
-            // }
-            // res = box_hit(ray, vec3(pos.x-1,pos.y,pos.z), chunk, real_box);
-            // if res.valid {
-            //     return res;
-            // }
-            // res = box_hit(ray, vec3(pos.x,pos.y+1,pos.z), chunk, real_box);
-            // if res.valid {
-            //     return res;
-            // }
-            // res = box_hit(ray, vec3(pos.x,pos.y-1,pos.z), chunk, real_box);
-            // if res.valid {
-            //     return res;
-            // }
-            
-            // res = box_hit(ray, vec3(pos.x,pos.y,pos.z+1), chunk, real_box);
-            // if res.valid {
-            //     return res;
-            // }
-            // res = box_hit(ray, vec3(pos.x,pos.y,pos.z-1), chunk, real_box);
-            // if res.valid {
-            //     return res;
-            // }
         }
+        res.valid=false;
+        return res;
     }
     return res;
 }
 
-fn box_hit(ray: Ray, pos: vec3<f32>, chunk: VoxelChunk, box: Box) -> HitRecordResult {
+fn box_hit(ray: Ray, pos: vec3<f32>, chunk: VoxelChunk, box: Box, t: f32) -> HitRecordResult {
     var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
     
     
@@ -388,10 +424,10 @@ fn box_hit(ray: Ray, pos: vec3<f32>, chunk: VoxelChunk, box: Box) -> HitRecordRe
     }
     let m = (mask >> idx) & u32(1);
     if (m==1) {
-        // res.valid = true;
-        // res.rec.normal = vec3(0.);
-        // res.rec.t = t;
-        // res.rec.color = pos;
+        res.valid = true;
+        res.rec.normal = vec3(0.);
+        res.rec.t = t;
+        res.rec.color = pos;
 
         // ray.orig = ;
         // return res;
@@ -499,7 +535,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let focus = false;
     
-    let samples_per_pixel = 2;
+    let samples_per_pixel = 1;
     var antialiasing = false;
     if samples_per_pixel>1 {antialiasing=true;}
     var c = vec3(0.);
