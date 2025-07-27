@@ -55,7 +55,7 @@ pub fn voxel_chunk(pos: IVec3, blks: u64, prefix_in_block_data_array: u32) -> Vo
     VoxelChunk { pos, inner: uvec2((blks&u32::MAX as u64) as u32, (blks>>32) as u32), prefix_in_block_data_array }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub enum MapType {
     #[default]
     Block,
@@ -85,6 +85,7 @@ impl MapData {
             _ => unreachable!(),
         }
     }
+
     pub fn block(layer: u32) -> Self {
         Self {
             layer: layer<<2,
@@ -96,8 +97,20 @@ todo!()
     pub fn entity(layer: u32) -> Self {
 todo!()
     }
-    pub fn tail(layer: u32) -> Self {
-todo!()
+    pub fn tail(next_index: u32) -> Self {
+        Self {
+            // Set type bits to 11 and store next_index in remaining bits
+            layer: (0b11 | (next_index << 2)),
+        }
+    }
+
+    pub fn get_next_index(&self) -> Option<u32> {
+        if self.ty() == Some(MapType::Tail) {
+            assert!(self.layer >> 2 != 0);
+            Some(self.layer >> 2)
+        } else {
+            None
+        }
     }
 }
 
@@ -118,14 +131,59 @@ impl GameWorld {
             Some(id) => {
                 let idx = Self::delta_pos_to_idx(delta_pos);
                 let chunk = &mut self.voxel_chunks[id];
-                chunk.set_blocks(chunk.blocks() | (1<<idx));
-                let count = (chunk.blocks() & ((1 << idx) - 1)).count_ones();
-                let arr_idx = (chunk.prefix_in_block_data_array+count) as usize;
-                if arr_idx>=self.block_data.len() {
-                    let dt = arr_idx-self.block_data.len();
-                    for _ in 0..=dt {self.block_data.push(MapData::default());}
+                let was_set = chunk.blocks() & (1 << idx) != 0;
+                
+                if !was_set {
+                    // Add new block at end of array
+                    let new_idx = self.block_data.len() as u32;
+                    self.block_data.push(map_data);
+
+                    // Count set bits before our position (excluding the current bit)
+                    let count = (chunk.blocks() & ((1 << idx) - 1)).count_ones();
+                    
+                    if count == 0 {
+                        // First block in sequence - update chunk's prefix and point to old chain
+                        let old_prefix = chunk.prefix_in_block_data_array;
+                        chunk.prefix_in_block_data_array = new_idx;
+                        if old_prefix != 0 {
+                            self.block_data.push(MapData::tail(old_prefix));
+                        }
+                    } else {
+                        // Follow the chain until we find the insertion point
+                        let mut current_idx = chunk.prefix_in_block_data_array;
+                        let mut found_count = 0;
+                        
+                        // Keep track of previous block to detect end of chain
+                        let mut prev_idx = current_idx;
+                        
+                        while found_count < count {
+                            match self.block_data[current_idx as usize].get_next_index() {
+                                Some(next) => {
+                                    prev_idx = current_idx;
+                                    current_idx = next;
+                                    found_count += 1;
+                                }
+                                None => {
+                                    // We've reached the end of the chain
+                                    self.block_data[prev_idx as usize] = MapData::tail(new_idx);
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        // If we found the right position in the middle of the chain
+                        if found_count == count {
+                            let next = self.block_data[prev_idx as usize].get_next_index();
+                            self.block_data[prev_idx as usize] = MapData::tail(new_idx);
+                            if let Some(next) = next {
+                                self.block_data.push(MapData::tail(next));
+                            }
+                        }
+                    }
+                    
+                    // Update the chunk's block mask after everything else is set up
+                    chunk.set_blocks(chunk.blocks() | (1 << idx));
                 }
-                self.block_data[arr_idx] = map_data;
             },
             None => {
                 println!("Generating chunk {:?} from block pos: {:?}", cp, pos);
@@ -145,13 +203,23 @@ impl GameWorld {
             let idx = Self::delta_pos_to_idx(delta_pos);
             let chunk = &self.voxel_chunks[id];
             let blks = chunk.blocks();
-            if blks & (1<<idx) != 0 {
-                let count = (blks & ((1 << idx) - 1)).count_ones();
-                // dbg!(count, idx);
-                return Some(&self.block_data[(chunk.prefix_in_block_data_array+count) as usize]);
+            if blks & (1 << idx) != 0 {
+                let target_count = (blks & ((1 << idx) - 1)).count_ones();
+                
+                // Follow linked list
+                let mut current_idx = chunk.prefix_in_block_data_array;
+                let mut found_count = 0;
+                while found_count < target_count {
+                    if let Some(next) = self.block_data[current_idx as usize].get_next_index() {
+                        current_idx = next;
+                        found_count += 1;
+                    } else {
+                        return None; // Corrupted list
+                    }
+                }
+                return Some(&self.block_data[current_idx as usize]);
             }
         }
-        
         None
     }
 

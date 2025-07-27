@@ -49,12 +49,15 @@ fn setup(
     let mut world = GameWorld::default();
 
     for x in -5..5 {
-        for y in -5..5 {
+        for y in -3..5 {
             for z in -5..5 {
-                world.set_block(ivec3(x*4,y,z), MapData::block(1))
+                let mut layer = 1;
+                if y ==4{layer=0;}
+                world.set_block(ivec3(x,y,z), MapData::block(layer))
             }
         }
     }
+    world.set_block(ivec3(0,10,0), MapData::block(0));
     let center = vec3(0., 0., 0.);
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::from_size(vec3(1.6, 0.9, 1.)))),

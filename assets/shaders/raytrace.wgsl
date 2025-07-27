@@ -333,6 +333,35 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
     return res;
 }fn fastFloor(v: vec3<f32>) -> vec3<i32> {
     return vec3<i32>(select(v - 1.0, v, fract(v) >= vec3<f32>(0.0)));
+}fn count_bits_in_range(value: u32, start: u32, end: u32) -> u32 {
+    // Create mask for the range we want (e.g., bits 1-10)
+    let mask = ((1u << (end - start)) - 1u) << start;
+    // Apply mask and get only the bits we want
+    let masked = value & mask;
+    
+    // Count the bits using parallel bit counting
+    var x = masked;
+    x = x - ((x >> 1u) & 0x55555555u);
+    x = (x & 0x33333333u) + ((x >> 2u) & 0x33333333u);
+    x = (x + (x >> 4u)) & 0x0F0F0F0Fu;
+    x = x + (x >> 8u);
+    x = x + (x >> 16u);
+    return x & 0x3Fu; // Get final count
+}fn get_block_data(chunk: VoxelChunk, target_idx: u32) -> u32 {
+    var current_idx = chunk.prefix_in_block_data_array;
+    var found_count = 0u;
+    
+    while (found_count < target_idx) {
+        let current = block_data[current_idx];
+        // Check if it's a tail (type bits = 11)
+        if ((current.layer & 3) == 3) {
+            current_idx = current.layer >> 2u; // Get next index
+            found_count += 1u;
+        } else {
+            break; // Corrupted list
+        }
+    }
+    return current_idx;
 }
 
 fn hit_chunk_gen(ray: Ray, chunk: VoxelChunk) -> HitRecordResult {
@@ -368,7 +397,7 @@ fn hit_chunk_gen(ray: Ray, chunk: VoxelChunk) -> HitRecordResult {
         if any(pos < vec3(0)) || any(pos >= vec3(4)){
             break;
         }
-        let real_box = Box(vec3<f32>(pos)+box.min,vec3<f32>(pos)+box.min+vec3(1.), 0);
+        var real_box = Box(vec3<f32>(pos)+box.min,vec3<f32>(pos)+box.min+vec3(1.), 0);
         
         var idx = u32(pos.x)+u32(pos.y)*4+u32(pos.z)*16;
         var bitmask: u32;
@@ -379,6 +408,8 @@ fn hit_chunk_gen(ray: Ray, chunk: VoxelChunk) -> HitRecordResult {
             idx = idx-32;
         }
         if (((bitmask >> idx) & 1) == 1) {
+            let block_data = block_data[get_block_data(chunk, idx)];
+            real_box.texture_id = block_data.layer;
             return hit_box_gen(ray, real_box);
         }
         if use_branchless_dda {
