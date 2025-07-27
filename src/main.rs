@@ -2,7 +2,7 @@
 use std::ops::RangeInclusive;
 
 use bevy::{
-    asset::RenderAssetUsages, pbr::{NotShadowCaster, NotShadowReceiver}, prelude::*, render::{batching::NoAutomaticBatching, render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat}, view::NoFrustumCulling}
+    asset::RenderAssetUsages, pbr::{NotShadowCaster, NotShadowReceiver}, prelude::*, render::{batching::NoAutomaticBatching, render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat}, storage::ShaderStorageBuffer, view::NoFrustumCulling}
 };
 use noise::{NoiseFn, Perlin};
 use world::*;
@@ -10,6 +10,7 @@ use world::*;
 pub mod build;
 pub mod camera;
 pub mod world;
+
 use bevy::{
     prelude::*,
     reflect::TypePath,
@@ -45,32 +46,46 @@ fn setup(
     commands.spawn(iyes_perf_ui::prelude::PerfUiDefaultEntries::default());
     let trans = Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y);
 
-    let spheres = &[
-        sphere(vec3(0., 1., -1.2), 0.5, vec3(0.1, 0.2, 0.5)),
-        // sphere(vec3(-1., 0., -1.), 0.5, vec3(0.8, 0.8, 0.8)),
-        // sphere(vec3(1., 0., -1.), 0.5, vec3(0.8, 0.8, 0.8)),
-        // sphere(vec3(0., -100.5, -1.), 100., vec3(0.8, 0.6, 0.2)),
-    ];
-    let spheres_buffer = buffers.add(bevy::render::storage::ShaderStorageBuffer::from(spheres));
-    let mut boxes: Vec<world::Box> = vec![];
-    let mut voxels: Vec<world::Voxel> = vec![];
-    let mut voxel_chunks = vec![];
-    let mut block_data: Vec<BlockData> = vec![];
+    let mut world = GameWorld::default();
 
     for x in -5..5 {
         for y in -5..5 {
             for z in -5..5 {
-                voxel_chunks.push(voxel_chunk(vec3(x as _, y as _, z as _), 0));
+                world.set_block(ivec3(x*4,y,z), MapData::block(1))
             }
         }
     }
-    let boxes_buffer = buffers.add(bevy::render::storage::ShaderStorageBuffer::from(boxes));
     let center = vec3(0., 0., 0.);
+    commands.spawn((
+        Mesh3d(meshes.add(Cuboid::from_size(vec3(1.6, 0.9, 1.)))),
+        MeshMaterial3d(materials.add(CustomMaterial {
+            image_dimensions: window_query.single().unwrap().resolution.size(),
+            camera: FragCamera {
+                center,
+                direction: look_at(center, vec3(0., 0., -1.)),
+                fov: 90.,
+            },
+            atlas: get_atlas_handle(imgs).unwrap(),
+            
+            spheres: buffers.add(ShaderStorageBuffer::from(world.spheres)),
+            boxes: buffers.add(ShaderStorageBuffer::from(world.boxes)),
+            voxels: buffers.add(ShaderStorageBuffer::from(world.voxels)),
+            voxel_chunks: buffers.add(ShaderStorageBuffer::from(world.voxel_chunks)),
+            block_data: buffers.add(ShaderStorageBuffer::from(world.block_data)),
+        })),
+        Transform::from_xyz(0.0, 0.0, 0.0),
+    ));
 
+    commands.spawn((Camera3d::default(), Camera::default(), trans));
+}
+
+fn get_atlas_handle(
+    mut imgs: ResMut<Assets<Image>>,
+) -> Result<Handle<Image>> {
 
     let mut imgs_raw = Vec::new();
-    for entry in std::fs::read_dir("assets/images").unwrap() {
-        let img = image::ImageReader::open(entry.unwrap().path()).unwrap().decode().unwrap().to_rgba8();
+    for entry in std::fs::read_dir("assets/images")? {
+        let img = image::ImageReader::open(entry?.path())?.decode()?.to_rgba8();
         imgs_raw.push(img);
     }
     let width = imgs_raw[0].width();
@@ -78,7 +93,7 @@ fn setup(
     let layers = imgs_raw.len() as u32;
     let mut combined = image::ImageBuffer::new(width, height * layers);
     for (i, img) in imgs_raw.iter().enumerate() {
-        image::GenericImage::copy_from(&mut combined, img, 0, i as u32 * height).unwrap();
+        image::GenericImage::copy_from(&mut combined, img, 0, i as u32 * height)?;
     }
 
     let data = combined.into_raw(); // Vec<u8>
@@ -90,28 +105,7 @@ fn setup(
         RenderAssetUsages::RENDER_WORLD,
     );
     image.reinterpret_stacked_2d_as_array(layers);
-    let atlas_handle = imgs.add(image);
-
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::from_size(vec3(1.6, 0.9, 1.)))),
-        MeshMaterial3d(materials.add(CustomMaterial {
-            image_dimensions: window_query.single().unwrap().resolution.size(),
-            spheres: spheres_buffer,
-            camera: FragCamera {
-                center,
-                direction: look_at(center, vec3(0., 0., -1.)),
-                fov: 90.,
-            },
-            boxes: boxes_buffer,
-            atlas: atlas_handle,
-            voxels: buffers.add(bevy::render::storage::ShaderStorageBuffer::from(voxels)),
-            voxel_chunks: buffers.add(bevy::render::storage::ShaderStorageBuffer::from(voxel_chunks)),
-            block_data: buffers.add(bevy::render::storage::ShaderStorageBuffer::from(block_data)),
-        })),
-        Transform::from_xyz(0.0, 0.0, 0.0),
-    ));
-
-    commands.spawn((Camera3d::default(), Camera::default(), trans));
+    Ok(imgs.add(image))
 }
 
 fn look_at(origin: Vec3, look_at: Vec3) -> Vec3 {

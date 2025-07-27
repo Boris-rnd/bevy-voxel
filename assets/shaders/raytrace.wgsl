@@ -9,7 +9,7 @@
 @group(2) @binding(3) var<storage, read> boxes: array<Box>;
 @group(2) @binding(6) var<storage, read> voxels: array<Voxel>;
 @group(2) @binding(7) var<storage, read> voxel_chunks: array<VoxelChunk>;
-@group(2) @binding(8) var<storage, read> block_data: array<BlockData>;
+@group(2) @binding(8) var<storage, read> block_data: array<MapData>;
 @group(2) @binding(4) var base_color_texture: texture_2d_array<f32>;
 @group(2) @binding(5) var base_color_sampler: sampler;
 
@@ -32,8 +32,8 @@ struct Ray {
     dir: vec3<f32>,
 }
 struct VoxelChunk {
-    pos: vec3<f32>,
-    inner: u64,
+    pos: vec3<i32>,
+    inner: vec2<u32>,
     prefix_in_block_data_array: u32,
 }
 struct Voxel {
@@ -53,7 +53,12 @@ fn at(ray: Ray, t: f32) -> vec3<f32> {
     return ray.orig + t*ray.dir;
 }
 
-struct BlockData {
+struct MapData {
+    // 2 first bits = type:
+    // 00=block
+    // 01=chunk
+    // 10=entity
+    // 11=Tail
     layer: u32,
 }
 
@@ -63,7 +68,21 @@ struct Box {
     max: vec3<f32>,
     texture_id: u32,
 }
-
+fn div_euclid(a: i32, b: i32) -> i32 {
+    let q = a / b;
+    let r = a % b;
+    return q - select(0, 1, (r < 0) && (b > 0)) + select(0, 1, (r > 0) && (b < 0));
+}
+fn rem_euclid(a: i32, b: i32) -> i32 {
+    let r = a % b;
+    return select(r, r + abs(b), r < 0);
+}
+fn rem_euclid_v3(a: vec3<i32>, b: vec3<i32>) -> vec3<i32> {
+    return vec3(rem_euclid(a.x, b.x), rem_euclid(a.y, b.y), rem_euclid(a.z, b.z));
+}
+fn div_euclid_v3(a: vec3<i32>, b: vec3<i32>) -> vec3<i32> {
+    return vec3(div_euclid(a.x, b.x), div_euclid(a.y, b.y), div_euclid(a.z, b.z));
+}
 fn degrees_to_radians(deg: f32) -> f32 {
     return deg/180.*3.14159;
 }
@@ -315,127 +334,136 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
 }fn fastFloor(v: vec3<f32>) -> vec3<i32> {
     return vec3<i32>(select(v - 1.0, v, fract(v) >= vec3<f32>(0.0)));
 }
+
 fn hit_chunk_gen(ray: Ray, chunk: VoxelChunk) -> HitRecordResult {
-    let box = Box(chunk.pos*4, chunk.pos*4.+vec3(4.), 0);
-    let rt = box.min;
-    let lb = box.max;
+    // Calculate chunk bounds
+    let chunk_min = vec3<f32>(chunk.pos * 4);
+    let chunk_max = chunk_min + vec3(4.0);
+    let box = Box(chunk_min, chunk_max, 0);
 
-    let t135 = (lb-ray.orig)/ray.dir;
-    let t246 = (rt-ray.orig)/ray.dir;
-
+    // Ray-box intersection test for chunk bounds
+    let t135 = (box.max - ray.orig) / ray.dir;
+    let t246 = (box.min - ray.orig) / ray.dir;
+    
     let tmin = max(max(min(t135.x, t246.x), min(t135.y, t246.y)), min(t135.z, t246.z));
     let tmax = min(min(max(t135.x, t246.x), max(t135.y, t246.y)), max(t135.z, t246.z));
     
     var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
-
-    var t: f32;
-    // if tmax < 0, ray (line) is intersecting AABB, but the whole AABB is behind us
-    // if (tmax < 0) {
-    //     t = tmax;
-    //     c = vec3(1., 0., 0.);
-    // }
-    // if tmin > tmax, ray doesn't intersect AABB
-    if (tmin > tmax || tmax<0) {
-        t = tmax;
-    } else {
-        t = tmin;
-        let use_branchless_dda = true;
-        res.valid = true;
-        res.rec.t = t;
-        
-        let rayPos = at(ray, t-0.00001)-box.min;
-        var mapPos = vec3<i32>(floor(rayPos));
-        let deltaDist = abs(1. / ray.dir);
-        let rayStep = vec3<i32>(sign(ray.dir)); let f = fract(rayPos);
-
-    // Distance if ray direction is positive
-    let sideDist_pos = (1.0 - f) * deltaDist;
-    // Distance if ray direction is negative
-    let sideDist_neg = f * deltaDist;
-
-    // Use select to pick the correct one based on direction, this is branchless
-    var sideDist = select(sideDist_pos, sideDist_neg, rayStep < vec3<i32>(0));
-        // var sideDist = (sign(ray.dir) * (vec3<f32>(mapPos) - rayPos) + (sign(ray.dir) * 0.5) + 0.5) * deltaDist; 
-
-        var mask = vec3(0.);
-
-        for (var i=0;i<16;i++) {
-            if use_branchless_dda {
-                mask = cmple_to_unit(sideDist.xyz, min(sideDist.yzx, sideDist.zxy));
-                sideDist += vec3(mask) * deltaDist;
-                mapPos += vec3<i32>(vec3(mask)) * rayStep;
-            } else {
-                if (sideDist.x < sideDist.y) {
-                    if (sideDist.x < sideDist.z) {
-                        sideDist.x += deltaDist.x;
-                        mapPos.x += rayStep.x;
-                        mask = vec3(1., 0., 0.);
-                    }
-                    else {
-                        sideDist.z += deltaDist.z;
-                        mapPos.z += rayStep.z;
-                        mask = vec3(0., 0., 1.);
-                    }
-                }
-                else {
-                    if (sideDist.y < sideDist.z) {
-                        sideDist.y += deltaDist.y;
-                        mapPos.y += rayStep.y;
-                        mask = vec3(0., 1., 0.);
-                    }
-                    else {
-                        sideDist.z += deltaDist.z;
-                        mapPos.z += rayStep.z;
-                        mask = vec3(0., 0., 1.);
-                    }
-                }
-            }
-            let pos = vec3<f32>(mapPos);
-            if floor(pos.x)<0. || floor(pos.y)<0. || floor(pos.z)<0. ||
-            floor(pos.x)>=4. || floor(pos.y)>=4. || floor(pos.z)>=4. {
-                break;
-            }
-            // res.rec.color = pos;
-            // return res;
-            let bp = vec3(floor(pos.x), floor(pos.y), floor(pos.z));
-            let real_box = Box(bp+box.min-vec3(0.0),bp+box.min+vec3(1.), 0);
-            var res = box_hit(ray, pos, chunk, real_box, t);
-            if res.valid {
-                return res;
-            }
-        }
-        res.valid=false;
+    if (tmin > tmax || tmax < 0.0) {
         return res;
     }
+    // Saw no difference improvement on main computer, we'll see on laptop =)
+    let use_branchless_dda = true;
+    
+    let rayPos = at(ray, tmin+0.00001)-box.min;
+    var pos = vec3<i32>(rayPos);
+    let deltaDist = abs(1. / ray.dir);
+    let rayStep = vec3<i32>(sign(ray.dir)); 
+    
+    var sideDist = (sign(ray.dir) * (vec3<f32>(pos) - rayPos) + (sign(ray.dir) * 0.5) + 0.5) * deltaDist; 
+
+    var mask = vec3(0.);
+
+    for (var i=0;i<16;i++) {
+        if any(pos < vec3(0)) || any(pos >= vec3(4)){
+            break;
+        }
+        let real_box = Box(vec3<f32>(pos)+box.min,vec3<f32>(pos)+box.min+vec3(1.), 0);
+        
+        var idx = u32(pos.x)+u32(pos.y)*4+u32(pos.z)*16;
+        var bitmask: u32;
+        if (idx<32) {
+            bitmask = chunk.inner.x;
+        } else {
+            bitmask = chunk.inner.y;
+            idx = idx-32;
+        }
+        if (((bitmask >> idx) & 1) == 1) {
+            return hit_box_gen(ray, real_box);
+        }
+        if use_branchless_dda {
+            mask = cmple_to_unit(sideDist.xyz, min(sideDist.yzx, sideDist.zxy));
+            sideDist += mask * deltaDist;
+            pos += vec3<i32>(floor(mask)) * rayStep;
+        } else {
+            if (sideDist.x < sideDist.y) {
+                if (sideDist.x < sideDist.z) {
+                    sideDist.x += deltaDist.x;
+                    pos.x += rayStep.x;
+                    mask = vec3(1., 0., 0.);
+                }
+                else {
+                    sideDist.z += deltaDist.z;
+                    pos.z += rayStep.z;
+                    mask = vec3(0., 0., 1.);
+                }
+            }
+            else {
+                if (sideDist.y < sideDist.z) {
+                    sideDist.y += deltaDist.y;
+                    pos.y += rayStep.y;
+                    mask = vec3(0., 1., 0.);
+                }
+                else {
+                    sideDist.z += deltaDist.z;
+                    pos.z += rayStep.z;
+                    mask = vec3(0., 0., 1.);
+                }
+            }
+        }
+    }
     return res;
 }
 
-fn box_hit(ray: Ray, pos: vec3<f32>, chunk: VoxelChunk, box: Box, t: f32) -> HitRecordResult {
-    var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
+// fn box_hit(ray: Ray, idx2: u32, chunk: VoxelChunk, box: Box, t: f32) -> HitRecordResult {
+//     var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
     
+//     var idx = idx2;
+//     var mask: u32;
+//     if (idx<32) {
+//         mask = chunk.inner.x;
+//     } else {
+//         mask = chunk.inner.y;
+//         idx = idx-32;
+//     }
+//     let m = (mask >> idx) & u32(1);
+//     if (m==1) {
+//         return hit_box_gen(ray, box);
+//     }
+//     return res;
+// }
+// fn box_hit(ray: Ray, idx2: u32, chunk: VoxelChunk, box: Box, t: f32) -> HitRecordResult {
+//     var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
     
-    var idx = u32(floor(pos.x))+u32(floor(pos.y))*4+u32(floor(pos.z))*16;
-    var mask: u32;
-    if (idx<32) {
-        mask = u32(chunk.inner&0xFFFFFFFF);
-    } else {
-        mask = u32(chunk.inner>>32);
-        idx = idx-32;
-    }
-    let m = (mask >> idx) & u32(1);
-    if (m==1) {
-        res.valid = true;
-        res.rec.normal = vec3(0.);
-        res.rec.t = t;
-        res.rec.color = pos;
+//     var idx = idx2;
+//     var mask: u32;
+//     if (idx < 32u) {
+//         // Debug: Return red for first 32 bits
+//         if (chunk.inner.x != 0u) {
+//             return HitRecordResult(true, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(1.0, 0.0, 0.0)));
+//         }
+//     } else {
+//         // Debug: Return blue for last 32 bits
+//         if (chunk.inner.y != 0u) {
+//             return HitRecordResult(true, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.0, 0.0, 1.0)));
+//         }
+//         idx = idx - 32u;
+//     }
 
-        // ray.orig = ;
-        // return res;
-        // let bp = vec3(floor(pos.x), floor(pos.y), floor(pos.z));
-        return hit_box_gen(ray, box);
-    }
-    return res;
-}
+//     // Original logic
+//     let m = (mask >> idx) & u32(1);
+//     if (m == 1u) {
+//         return hit_box_gen(ray, box);
+//     }
+//     return res;
+// }
+
+// fn box_hit(ray: Ray, pos: vec3<f32>, chunk: VoxelChunk, box: Box, t: f32) -> HitRecordResult {
+//     var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
+    
+    
+//     return res;
+// }
 
 
 fn hit_sphere_gen(ray: Ray, ray_tmin: f32, ray_tmax: f32, sphere: Sphere) -> HitRecordResult {
