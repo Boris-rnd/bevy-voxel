@@ -1,4 +1,4 @@
-#![allow(unused_imports, dead_code)]
+#![allow(unused, dead_code)]
 use std::ops::RangeInclusive;
 
 use bevy::{
@@ -46,19 +46,29 @@ fn setup(
     commands.spawn(iyes_perf_ui::prelude::PerfUiDefaultEntries::default());
     let trans = Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y);
 
-    let mut world = GameWorld::default();
+    let mut world = GameWorld {
+        block_data: vec![MapData::block(0)],
+        voxel_chunks: vec![voxel_chunk(0, 16, 0, 1)],
+        ..Default::default()
+    };
 
-    for x in -5..5 {
-        for y in -3..5 {
-            for z in -5..5 {
-                let mut layer = 1;
-                if y ==4{layer=0;}
-                world.set_block(ivec3(x,y,z), MapData::block(layer))
+    let perlin = Perlin::new(1);
+    for x in 0..2 {
+        for y in 0..2 {
+            for z in 0..2 {
+                // if perlin.get([x as f64, y as f64, z as f64])>0.0 {
+                    world.set_block(ivec3( x*2,y,z), MapData::block(((x+y+z)%15) as u32));
+                // }
+                // let mut layer = 1;
+                // if y ==4{layer=0;}
+                // world.set_block(ivec3(x,y,z), MapData::block(layer))
             }
         }
     }
-    world.set_block(ivec3(0,10,0), MapData::block(0));
-    let center = vec3(0., 0., 0.);
+    world.set_block(ivec3(0,10,0), MapData::block(1));
+    dbg!(&world);
+
+    let center = vec3(-10., 10., -10.);
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::from_size(vec3(1.6, 0.9, 1.)))),
         MeshMaterial3d(materials.add(CustomMaterial {
@@ -87,13 +97,32 @@ fn get_atlas_handle(
 ) -> Result<Handle<Image>> {
 
     let mut imgs_raw = Vec::new();
-    for entry in std::fs::read_dir("assets/images")? {
-        let img = image::ImageReader::open(entry?.path())?.decode()?.to_rgba8();
-        imgs_raw.push(img);
+    let additionnal_paths = vec![
+        "assets/textures/block/diamond_block.png",
+        "assets/textures/block/cobblestone.png",
+        "assets/textures/block/dirt.png",
+        "assets/textures/block/oak_log.png",
+        ];
+    let target_size = 32; // Define target size for width and height
+    for entry in std::fs::read_dir("assets/images")?.filter(|path| path.is_ok()).map(|path| path.unwrap().path()).chain(additionnal_paths.into_iter().map(|p| p.into())) {
+        let img = image::ImageReader::open(entry)?.decode()?.to_rgba8();
+        
+        let resized = image::imageops::resize(&img,
+            target_size, 
+            target_size, 
+            image::imageops::FilterType::Nearest
+        );
+        
+        imgs_raw.push(resized);
     }
+    
     let width = imgs_raw[0].width();
     let height = imgs_raw[0].height();
     let layers = imgs_raw.len() as u32;
+    println!("Atlas size: {}x{}x{}", width, height, layers);
+    if imgs_raw.iter().any(|img| img.width() != width || img.height() != height) {
+        panic!("All images must have the same dimensions for atlas creation.");
+    }
     let mut combined = image::ImageBuffer::new(width, height * layers);
     for (i, img) in imgs_raw.iter().enumerate() {
         image::GenericImage::copy_from(&mut combined, img, 0, i as u32 * height)?;
