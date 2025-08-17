@@ -1,8 +1,16 @@
 #![allow(unused, dead_code)]
-use std::ops::RangeInclusive;
+use std::{cell::OnceCell, ops::RangeInclusive};
 
 use bevy::{
-    asset::RenderAssetUsages, pbr::{NotShadowCaster, NotShadowReceiver}, prelude::*, render::{batching::NoAutomaticBatching, render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat}, storage::ShaderStorageBuffer, view::NoFrustumCulling}
+    asset::RenderAssetUsages,
+    pbr::{NotShadowCaster, NotShadowReceiver},
+    prelude::*,
+    render::{
+        batching::NoAutomaticBatching,
+        render_resource::{Extent3d, ShaderType, TextureDimension, TextureFormat},
+        storage::ShaderStorageBuffer,
+        view::NoFrustumCulling,
+    },
 };
 use noise::{NoiseFn, Perlin};
 use world::*;
@@ -33,6 +41,7 @@ fn main() {
     .add_systems(Update, update);
     app.run();
 }
+static mut WORLD_PTR: OnceCell<GameWorld> = OnceCell::new();
 
 fn setup(
     mut commands: Commands,
@@ -47,17 +56,35 @@ fn setup(
     let trans = Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y);
 
     let mut world = GameWorld {
-        block_data: vec![MapData::block(0)],
-        voxel_chunks: vec![voxel_chunk(0, 16, 0, 1)],
+        block_data: vec![],
+        voxel_chunks: vec![voxel_chunk(0, 0, 0)],
         ..Default::default()
     };
+    unsafe {
+        WORLD_PTR.set(world).unwrap();
+        std::panic::set_hook(std::boxed::Box::new(|info| {
+        eprintln!("Panic occurred: {:?}", info);
+        eprintln!("{}", info.payload().downcast_ref::<String>().unwrap_or(&"No message".to_string()));
+        eprintln!("World state at panic: {:?}", WORLD_PTR.get().unwrap());
+        eprintln!("Prettier: {}", WORLD_PTR.get().unwrap().pretty_print());
+    }));
+        dbg!(WORLD_PTR.get().unwrap());
+    }
+    let mut world = unsafe { WORLD_PTR.get_mut().unwrap() };
 
     let perlin = Perlin::new(1);
-    for x in 0..2 {
-        for y in 0..2 {
-            for z in 0..2 {
+    for x in 0..16 {
+        for y in 1..3 {
+            for z in 0..16 {
+                    // world.set_data_in_chunk(0, LocalPos::new(x as u8, y as u8, z as u8), MapData::Chunk(3));
+                    // assert_eq!(world.get_data_in_chunk(0, LocalPos::new(x as u8, y as u8, z as u8)), Some(MapData::Chunk(3)));
+
                 // if perlin.get([x as f64, y as f64, z as f64])>0.0 {
-                    world.set_block(ivec3( x*2,y,z), MapData::block(((x+y+z)%15) as u32));
+                world.set_block(
+                    ivec3(x, y*5%15, z),
+                    MapData::Block(((x + y + z) % 15) as u32),
+                );
+                // dbg!(world.get_block(ivec3(x * 2, y, z)), &world.block_data);
                 // }
                 // let mut layer = 1;
                 // if y ==4{layer=0;}
@@ -65,10 +92,32 @@ fn setup(
             }
         }
     }
-    world.set_block(ivec3(0,10,0), MapData::block(1));
-    dbg!(&world);
+
+    println!("------------------------------------------------");
+    println!("World size: {:?}", world.root_size());
+    dbg!(&world.voxel_chunks.len());
+    dbg!(&world.block_data.len());
+
+    for x in 0..16 {
+        for y in 1..3 {
+            for z in 0..16 {
+                assert_eq!(
+                    world.get_block(ivec3(x, y*5%15, z)),
+                    Some(&MapData::Block(((x + y + z) % 15) as u32)).copied(),
+                    "{x},{y},{z}, {:?} {:?}", world.voxel_chunks, world.block_data
+                );
+            }
+        }
+    }
+    // assert_eq!(world.get_block(ivec3(0, 10, 0)), None);
+    // world.set_block(ivec3(0, 10, 0), MapData::Block(1));
+    // assert_eq!(world.get_block(ivec3(0, 10, 0)), Some(&MapData::Block(1)).copied());
+    // world.set_data_in_chunk(0, LocalPos::new(1,1,1), MapData::Block(2));
+    // dbg!(&world);
 
     let center = vec3(-10., 10., -10.);
+    std::panic::take_hook();
+    let mut world = unsafe { WORLD_PTR.take().unwrap() };
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::from_size(vec3(1.6, 0.9, 1.)))),
         MeshMaterial3d(materials.add(CustomMaterial {
@@ -79,7 +128,7 @@ fn setup(
                 fov: 90.,
             },
             atlas: get_atlas_handle(imgs).unwrap(),
-            
+
             spheres: buffers.add(ShaderStorageBuffer::from(world.spheres)),
             boxes: buffers.add(ShaderStorageBuffer::from(world.boxes)),
             voxels: buffers.add(ShaderStorageBuffer::from(world.voxels)),
@@ -92,35 +141,40 @@ fn setup(
     commands.spawn((Camera3d::default(), Camera::default(), trans));
 }
 
-fn get_atlas_handle(
-    mut imgs: ResMut<Assets<Image>>,
-) -> Result<Handle<Image>> {
-
+fn get_atlas_handle(mut imgs: ResMut<Assets<Image>>) -> Result<Handle<Image>> {
     let mut imgs_raw = Vec::new();
     let additionnal_paths = vec![
         "assets/textures/block/diamond_block.png",
         "assets/textures/block/cobblestone.png",
         "assets/textures/block/dirt.png",
         "assets/textures/block/oak_log.png",
-        ];
+    ];
     let target_size = 32; // Define target size for width and height
-    for entry in std::fs::read_dir("assets/images")?.filter(|path| path.is_ok()).map(|path| path.unwrap().path()).chain(additionnal_paths.into_iter().map(|p| p.into())) {
+    for entry in std::fs::read_dir("assets/images")?
+        .filter(|path| path.is_ok())
+        .map(|path| path.unwrap().path())
+        .chain(additionnal_paths.into_iter().map(|p| p.into()))
+    {
         let img = image::ImageReader::open(entry)?.decode()?.to_rgba8();
-        
-        let resized = image::imageops::resize(&img,
-            target_size, 
-            target_size, 
-            image::imageops::FilterType::Nearest
+
+        let resized = image::imageops::resize(
+            &img,
+            target_size,
+            target_size,
+            image::imageops::FilterType::Nearest,
         );
-        
+
         imgs_raw.push(resized);
     }
-    
+
     let width = imgs_raw[0].width();
     let height = imgs_raw[0].height();
     let layers = imgs_raw.len() as u32;
     println!("Atlas size: {}x{}x{}", width, height, layers);
-    if imgs_raw.iter().any(|img| img.width() != width || img.height() != height) {
+    if imgs_raw
+        .iter()
+        .any(|img| img.width() != width || img.height() != height)
+    {
         panic!("All images must have the same dimensions for atlas creation.");
     }
     let mut combined = image::ImageBuffer::new(width, height * layers);
@@ -130,7 +184,11 @@ fn get_atlas_handle(
 
     let data = combined.into_raw(); // Vec<u8>
     let mut image = Image::new(
-        Extent3d { width, height: height * layers, depth_or_array_layers: 1 },
+        Extent3d {
+            width,
+            height: height * layers,
+            depth_or_array_layers: 1,
+        },
         TextureDimension::D2,
         data,
         TextureFormat::Rgba8UnormSrgb,
@@ -192,7 +250,7 @@ fn update(
     if kb_input.pressed(KeyCode::KeyD) {
         direction += mat.camera.direction.cross(Vec3::Y);
     }
-    direction = vec3(direction.x,0.,direction.z);
+    direction = vec3(direction.x, 0., direction.z);
     if kb_input.pressed(KeyCode::Space) {
         direction.y += 1.;
     }
@@ -209,7 +267,6 @@ fn update(
 
     mat.camera.center += move_delta;
 }
-
 
 #[repr(C)]
 #[derive(ShaderType, Debug, Clone)]
@@ -231,7 +288,6 @@ struct CustomMaterial {
     voxel_chunks: Handle<bevy::render::storage::ShaderStorageBuffer>,
     #[storage(8, read_only)]
     block_data: Handle<bevy::render::storage::ShaderStorageBuffer>,
-
 
     #[uniform(1)]
     camera: FragCamera,
