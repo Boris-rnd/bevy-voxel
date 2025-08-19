@@ -192,6 +192,16 @@ fn root_chunk_size() -> u32 {
     return cam.root_chunk_size;
 }
 
+fn count_ones(n: u32) -> u32 {
+    var count = 0u;
+    var x = n;
+    while (x != 0u) {
+        count += x & 1u;
+        x >>= 1u;
+    }
+    return count;
+}
+
 
 @group(2) @binding(1) var<uniform> cam: Camera;
 @group(2) @binding(2) var<storage, read> spheres: array<Sphere>;
@@ -290,24 +300,29 @@ fn get_data_in_chunk(pos: vec3<i32>, chk: VoxelChunk, par_pos: vec3<i32>, dep:u3
     var parent_pos = par_pos;
     var end_depth = dep;
     var curr_data = 1u; // Root chunk
+    var prev_idx = 0u;
     for (var depth = dep;depth<=max_depth;depth++) {
         end_depth = depth;
         let chunk_size = i32(depth_to_chunk_size(depth-1));
-        parent_pos += (ivec3_local_pos(chunk)*chunk_size);
-        local_pos = div_euclid_v3(pos - parent_pos, vec3<i32>(chunk_size/4));
-        var idx = u32(local_pos.x)+u32(local_pos.y)*4+u32(local_pos.z)*16;
+        parent_pos += ((vec3<i32>(vec3(prev_idx & 3, (prev_idx>>2) & 3, (prev_idx>>4) & 3)))*chunk_size);
+        local_pos = div_euclid_v3(pos - parent_pos, vec3<i32>(chunk_size>>2));
+        var idx = u32(local_pos.x)+(u32(local_pos.y)<<2u)+u32((local_pos.z)<<4u);
         var mask = chunk.inner.x;
         var set_bits = u32(0);
-        if idx>=64 && depth==3 {return DataResult(0, 0);}
+        if any(local_pos >= vec3(4) || local_pos < vec3(0)) {return DataResult(0, 0);}
+        prev_idx = idx;
         if idx>=32 {
             mask = chunk.inner.y;
             idx = idx-32;
-            set_bits = count_bits_in_range(chunk.inner.x, 0, 32)+count_bits_in_range(chunk.inner.y, 0, idx);
+            set_bits = count_ones(chunk.inner.x)+count_ones((((1u << idx) - 1) & chunk.inner.y));
         } else {
-            set_bits = count_bits_in_range(chunk.inner.x, 0, idx);
+            set_bits = count_ones((((1u << idx) - 1) & chunk.inner.x));
         }
         if (mask&(u32(1)<<idx))==0 {
             break;
+        }
+        if u32(chunk.prefix_in_block_data_array+set_bits)>arrayLength(&block_data) {
+            break; // Out of bounds
         }
         curr_data = block_data[chunk.prefix_in_block_data_array+set_bits].data;
         let ty = curr_data&3;
@@ -325,102 +340,98 @@ fn get_data_in_chunk(pos: vec3<i32>, chk: VoxelChunk, par_pos: vec3<i32>, dep:u3
     // Returns root chunk if nothing found or latest chunk
     return DataResult(curr_data, u32(end_depth));
 }
-
 fn hit(ray: Ray) -> HitRecordResult {
-    var temp_rec = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
-    var root_chunk = voxel_chunks[0];
+    var miss = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
 
-    
-    // Check if ray intersects the root chunk
-    var t = hit_box_t(ray, vec3(0.), vec3(f32(root_chunk_size())));
-    if t == -1. {
-        return temp_rec; // No hit
-    }
-    // If it does, we can start checking the chunk
-    // DDA Algo
-    // Saw no difference improvement on main computer, we'll see on laptop =)
-    let use_branchless_dda = false;
+    let root = voxel_chunks[0];
+    let world_min = vec3<f32>(0.0);
+    let world_max = vec3<f32>(f32(root_chunk_size()));
 
-    var rayPos = at(ray, t+0.00001);
-    if all(ray.orig > vec3(0.)) && all(ray.orig < vec3(f32(root_chunk_size()))) {
-        rayPos = ray.orig;
+    // Intersect ray with root AABB
+    var t = hit_box_t(ray, world_min, world_max);
+    if (t == -1.0) {
+        return miss;
     }
 
-    var pos = vec3<i32>(rayPos);
-    var deltaDist = abs(1. / ray.dir);
-    var rayStep = vec3<i32>(sign(ray.dir)); 
-    
-    var sideDist = (sign(ray.dir) * (vec3<f32>(pos) - rayPos) + (sign(ray.dir) * 0.5) + 0.5) * deltaDist; 
+    // Start just inside
+    var posf = at(ray, t + 1e-5);
+    if all(ray.orig > world_min) && all(ray.orig < world_max) {
+        posf = ray.orig;
+    }
 
-    var mask = vec3(0.);
+    // Precompute signs and reciprocals
+    let dir = ray.dir;
+    let rcp = 1.0 / dir;
+    let stepf = sign(dir);              // -1, 0, or 1 per axis
+    let step = vec3<i32>(stepf);        // for index stepping
 
-    var curr_chunk = root_chunk;
-    var parent_pos = vec3<i32>(0);
-    var depth = 1u;
-    var step_size = 1;
+    // Clamp a to multiples of S in the correct direction
+    let eps = 5e-4;
 
-    for (var i=0;i<200;i++) {
-        if any(pos < vec3(0)) || any(pos >= vec3(i32(root_chunk_size()))){
+    // Main traversal
+    // Hard cap to avoid infinite loops in degenerate cases
+    for (var iter = 0; iter < 500; iter = iter + 1) {
+        if any(posf < world_min) || any(posf > world_max ) {
             break;
         }
-        let _b = get_data_in_chunk(pos, curr_chunk,parent_pos, depth, 6);
-        if _b.data==0 && _b.depth==0 {
-            break; // No data found, stop
+
+        // Query world at current integer voxel position
+        let posi = vec3<i32>(posf);
+        let res = get_data_in_chunk(posi, root, vec3<i32>(0), 1u, 6u);
+
+        // No data anywhere -> miss
+        if (res.data == 0u && res.depth == 0u) {
+            break;
         }
-        let block_data = _b.data;
-        let ty = block_data&3u;
-        if ty==1u { // Chunk is not empty, so traverse it to know if we hit something
-            // depth = _b.depth;
-            // var S      = 1; 
-            step_size = i32(depth_to_chunk_size(_b.depth));
-            // pos = div_euclid_v3(pos, vec3<i32>(step_size)) * step_size;
-//             let S = i32(depth_to_chunk_size(depth));   // chunk size in voxels
-// let sgn = sign(ray.dir);
 
-// // align position to chunk grid
-// let base = div_euclid_v3(pos, vec3<i32>(S)) * S;
-// pos = base;
+        let ty = res.data & 3u;
 
-// // distance to next boundary in each axis
-// let next_boundary = base + select(vec3<i32>(0), vec3<i32>(S), sgn > vec3(0.));
-// sideDist = (vec3<f32>(next_boundary) - rayPos) / ray.dir;
-
-// // stride + step
-// deltaDist = abs(vec3<f32>(S) / ray.dir);
-// rayStep   = vec3<i32>(sgn) * S;
-            // let sgn    = sign(ray.dir);
-            // let invDir = abs(1.0 / ray.dir);
-
-            // // align current voxel to this chunk cell
-            // pos = div_euclid_v3(pos, vec3<i32>(S)) * S;
-
-            // // rescale DDA
-            // deltaDist = abs(vec3<f32>(S) / ray.dir);
-            // sideDist  = ( sgn * (vec3<f32>(pos) - rayPos)
-            //             + sgn * (0.5 * f32(S)) + 0.5 * f32(S) ) * invDir;
-
-            // rayStep   = vec3<i32>(sgn) * S;
-
+        // Hit a solid block -> do precise block AABB hit & return
+        if (ty == 2u) {
+            return hit_box_gen(
+                ray,
+                Box(vec3<f32>(posi), vec3<f32>(posi) + vec3<f32>(1.0), (u32(res.data>>2)))); // res.data>>2
         }
-        if (ty == 2u) { // Block
-            return hit_box_gen(ray, Box(vec3<f32>(pos), vec3<f32>(pos)+vec3(1.), block_data>>2)); // block_data>>2 | u32(i)
-        } 
 
-        for (var j=0;j<step_size;j++) {
-            if use_branchless_dda {
-                mask = cmple_to_unit(sideDist.xyz, min(sideDist.yzx, sideDist.zxy));
-                sideDist += mask * deltaDist;
-                pos += vec3<i32>(floor(mask)) * rayStep;
-            } else {
-                let _vals = branchless_dda(sideDist, pos, deltaDist, rayStep);
-                sideDist = _vals.sideDist;
-                pos = _vals.pos;
-                mask = _vals.mask;
-            }
+        // Otherwise we’re inside a (non-empty) chunk cell: step to next boundary
+        // Cell size at this depth (size of a child cell of that chunk)
+        var S = f32(depth_to_chunk_size(res.depth));
 
+        // Handle degenerate directions: if a dir component is zero, never cross that axis
+        let inf = 1e30;
+
+        // Current indices in this cell grid
+        let idx = floor(posf / S);
+
+        // Next boundary for each axis depending on ray direction
+        // stepf > 0 -> boundary at (idx+1)*S
+        // stepf < 0 -> boundary at idx*S (the lower boundary of current cell)
+        let next_x = select(idx.x * S, (idx.x + 1.0) * S, stepf.x > 0.0);
+        let next_y = select(idx.y * S, (idx.y + 1.0) * S, stepf.y > 0.0);
+        let next_z = select(idx.z * S, (idx.z + 1.0) * S, stepf.z > 0.0);
+
+        // Distances along the ray to those boundaries
+        var tMax = vec3<f32>(
+            select(inf, (next_x - posf.x) * rcp.x, dir.x != 0.0),
+            select(inf, (next_y - posf.y) * rcp.y, dir.y != 0.0),
+            select(inf, (next_z - posf.z) * rcp.z, dir.z != 0.0)
+        );
+
+        // If we were exactly on a boundary, nudge forward to avoid sticking
+        tMax = max(tMax, vec3<f32>(0.0));
+
+        // Choose smallest positive t
+        let tStep = min(tMax.x, min(tMax.y, tMax.z));
+        if !(tStep < inf) {
+            break;
         }
+
+        // Advance along ray to the selected boundary
+        posf = posf + dir * (tStep + eps);
+
     }
-    return temp_rec; // No hit
+
+    return miss;
 }
 fn hit_box_t(ray: Ray, bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
     let t135 = (bmax-ray.orig)/ray.dir;
@@ -552,7 +563,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     let focus = false;
     
-    let samples_per_pixel = 2;
+    let samples_per_pixel = 1;
     var antialiasing = false;
     if samples_per_pixel>1 {antialiasing=true;}
     var c = vec3(0.);

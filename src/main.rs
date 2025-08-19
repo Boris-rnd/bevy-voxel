@@ -83,9 +83,20 @@ fn setup(
             for z in 0..world.root_size() as i32 {
                 // if perlin.get([x as f64, y as f64, z as f64])>0.0 {
                 world.set_block(
-                    ivec3(x, perlin.get([x as f64,z as f64]) as i32+y, z),
+                    ivec3(x, ((perlin.get([x as f64/20.,z as f64/20.])*20.) as i32+y).abs(), z),
                     MapData::Block(((x + y + z) % 15) as u32),
                 );
+            }
+        }
+    }
+    for x in 0..world.root_size() as i32 {
+        for y in 1..3 {
+            for z in 0..world.root_size() as i32 {
+                // if perlin.get([x as f64, y as f64, z as f64])>0.0 {
+                assert_eq!(world.get_block(
+                    ivec3(x, ((perlin.get([x as f64/20.,z as f64/20.])*20.) as i32+y).abs(), z)),
+                    Some(MapData::Block(((x + y + z) % 15) as u32))
+                , "{x},{y},{z}, {:?} {:?}", world.voxel_chunks, world.block_data);
             }
         }
     }

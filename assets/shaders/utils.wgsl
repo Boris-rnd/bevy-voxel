@@ -187,3 +187,13 @@ fn depth_to_chunk_size(depth: u32) -> u32 {
 fn root_chunk_size() -> u32 {
     return cam.root_chunk_size;
 }
+
+fn count_ones(n: u32) -> u32 {
+    var count = 0u;
+    var x = n;
+    while (x != 0u) {
+        count += x & 1u;
+        x >>= 1u;
+    }
+    return count;
+}
