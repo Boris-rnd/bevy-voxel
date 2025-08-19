@@ -1,6 +1,6 @@
 use std::cell::UnsafeCell;
 
-use bevy::{math::ops::rem_euclid, prelude::*, render::render_resource::ShaderType};
+use bevy::{log, math::ops::rem_euclid, prelude::*, render::render_resource::ShaderType};
 
 #[derive(ShaderType)]
 #[repr(C)]
@@ -364,7 +364,7 @@ impl GameWorld {
         &self.voxel_chunks[0]
     }
     pub fn root_size(&self) -> usize {
-        16
+        4u32.pow(4) as _
     }
     fn block_iter_inner(&mut self, pos: IVec3, map_data: Option<MapData>) -> Option<MapData> {
         if pos.x < self.root_size() as i32
@@ -375,9 +375,9 @@ impl GameWorld {
             let mut parent_pos = IVec3::ZERO;
             let mut local_pos = pos;
             if map_data.is_none() {
-                println!("\n------Getting block at {:?}-------", pos);
+                log::trace!("\n------Getting block at {:?}-------", pos);
             } else {
-                println!(
+                log::trace!(
                     "\n------Setting block at {:?} with data {:?}-------",
                     pos, map_data
                 );
@@ -387,30 +387,24 @@ impl GameWorld {
                 let chunk_size = self.root_size() as i32 / (4i32.pow(depth - 1));
                 parent_pos += chunk.local_pos().ivec3() * chunk_size;
                 local_pos = (pos - parent_pos).div_euclid(IVec3::splat(chunk_size / 4));
-                println!("{depth}: {local_pos:?} -> Chunk {curr_idx} (offset: {parent_pos:?}) with size: {}", chunk_size);
+                log::trace!("{depth}: {local_pos:?} -> Chunk {curr_idx} (offset: {parent_pos:?}) with size: {}", chunk_size);
                 if chunk_size == 4 && map_data.is_some() {
                     // If the chunk is 4x4x4, we can set the block directly
-                    println!("Setting block in chunk {curr_idx} at local pos {local_pos:?}");
+                    log::trace!("Setting block in chunk {curr_idx} at local pos {local_pos:?}");
                     self.set_data_in_chunk(curr_idx, local_pos.to_local_pos(), map_data.unwrap());
                     return None;
                 }
 
-                if pos == ivec3(1,5,3) {
-                    dbg!(self.pretty_print());
-                    dbg!(chunk.get_block(local_pos.to_local_pos()), local_pos, local_pos.to_local_pos().idx, local_pos.to_local_pos().ivec3(), chunk.blocks());
-                    let map_data_idx = chunk.local_pos_to_map_data_idx(local_pos.to_local_pos()) as usize;
-                    dbg!(map_data_idx);
-                }
                 // If the chunk is smaller, we need to go deeper
                 match self.get_data_in_chunk(curr_idx, local_pos.to_local_pos()) {
                     Some(data) => match data {
                         MapData::Chunk(id) => {
-                            println!("Got smaller chunk {id} with parent pos {parent_pos:?}");
+                            log::trace!("Got smaller chunk {id} with parent pos {parent_pos:?}");
                             curr_idx = id as usize;
                         }
                         MapData::Block(layer) => match map_data {
                             Some(data) => {
-                                println!(
+                                log::trace!(
                                     "Block data already exists at {:?}, replacing with {:?}",
                                     local_pos, map_data
                                 );
@@ -427,7 +421,7 @@ impl GameWorld {
                         match map_data {
                             Some(data) => {
                                 // Setting block
-                                println!("Chunk {curr_idx} at {local_pos:?}={} is empty, filling with new chunk {} at offset {} in block data array", local_pos.to_local_pos().idx, self.voxel_chunks.len(), self.block_data.len());
+                                log::trace!("Chunk {curr_idx} at {local_pos:?}={} is empty, filling with new chunk {} at offset {} in block data array", local_pos.to_local_pos().idx, self.voxel_chunks.len(), self.block_data.len());
                                 let v = voxel_chunk(
                                     local_pos.to_local_pos().idx as u32,
                                     0,
@@ -443,14 +437,14 @@ impl GameWorld {
                                 );
                             } // Get block
                             None => {
-                                println!("No data found in chunk {curr_idx} at local pos {local_pos:?}, returning None");
-                                println!(
+                                log::trace!("No data found in chunk {curr_idx} at local pos {local_pos:?}, returning None");
+                                log::trace!(
                                     "{local_pos}={} in {:b}",
                                     local_pos.to_local_pos().idx,
                                     self.voxel_chunks[curr_idx].blocks()
                                 );
                                 if self.voxel_chunks[curr_idx].get_block(local_pos.to_local_pos()) {
-                                    println!("But bit is set !");
+                                    log::trace!("But bit is set !");
                                 }
                                 return None;
                             }
@@ -467,112 +461,6 @@ impl GameWorld {
     pub fn set_block(&mut self, pos: IVec3, map_data: MapData) {
         assert!(matches!(map_data, MapData::Block(_)));
         self.block_iter_inner(pos, Some(map_data));
-        //     while curr.size != 4 {
-        //         local_pos = curr.to_local_pos(parent_pos);
-        //         dbg!(local_pos, pos);
-        //         let idx = local_chunk_pos_to_idx(local_pos);
-        //         assert!(idx < 64, "Index out of bounds: {}", idx);
-        //         map_data_idx = curr.local_idx_to_map_data_idx(idx) as usize;
-        //         map_data_idx = self.map_data_follow_tails(map_data_idx);
-        //         // If the chunk is not 4x4x4, we need to create a new chunk
-        //         // with smaller size
-        //         let blks = 1<<idx;
-        //         let new_chunk = voxel_chunk(idx, curr.size/4, blks, self.block_data.len() as u32);
-        //         self.voxel_chunks.push(new_chunk);
-
-        //     }
-        //     curr.set_block(local_pos);
-
-        //     if map_data_idx>=self.block_data.len()+1 {
-        //         todo!("Nothing at {}, {}", map_data_idx, self.block_data.len());
-        //     } else if map_data_idx==self.block_data.len() {
-        //         self.block_data.push(map_data);
-        //     } else {
-        //         let end_idx = self.map_data_follow_tails(map_data_idx as _);
-        //         let data = &self.block_data[end_idx];
-        //         println!("Overwritting data at {:?} with {:?}", pos, map_data);
-        //         self.block_data[end_idx] = map_data;
-        //     }
-        //     // self.set_block_in_root(pos, map_data);
-        // } else {
-        //     todo!();
-        //     // Make new root 4x bigger to englobe previous root chunk
-        //     // self.voxel_chunks.push(self.root_chunk());
-        //     // let prev_pos = self.root_chunk().pos;
-        //     // self.root_chunk() = voxel_chunk(prev_pos, self.root_chunk().size*4, 0, self.block_data.len() as _);
-        //     // self.root_chunk().set_block(pos - self.root_chunk().min());
-
-        // }
-        // let cp = Self::to_chunk_pos(pos);
-        // let delta_pos = Self::block_pos_to_delta_pos(pos);
-
-        // match self.get_chunk_id_from_block_pos(pos) {
-        //     Some(id) => {
-        //         let idx = Self::delta_pos_to_idx(delta_pos);
-        //         let chunk = &mut self.voxel_chunks[id];
-        //         let was_set = chunk.blocks() & (1 << idx) != 0;
-
-        //         if !was_set {
-        //             // Add new block at end of array
-        //             let new_idx = self.block_data.len() as u32;
-        //             self.block_data.push(map_data);
-
-        //             // Count set bits before our position (excluding the current bit)
-        //             let count = (chunk.blocks() & ((1 << idx) - 1)).count_ones();
-
-        //             if count == 0 {
-        //                 // First block in sequence - update chunk's prefix and point to old chain
-        //                 let old_prefix = chunk.prefix_in_block_data_array;
-        //                 chunk.prefix_in_block_data_array = new_idx;
-        //                 if old_prefix != 0 {
-        //                     self.block_data.push(MapData::tail(old_prefix));
-        //                 }
-        //             } else {
-        //                 // Follow the chain until we find the insertion point
-        //                 let mut current_idx = chunk.prefix_in_block_data_array;
-        //                 let mut found_count = 0;
-
-        //                 // Keep track of previous block to detect end of chain
-        //                 let mut prev_idx = current_idx;
-
-        //                 while found_count < count {
-        //                     match self.block_data[current_idx as usize].get_next_index() {
-        //                         Some(next) => {
-        //                             prev_idx = current_idx;
-        //                             current_idx = next;
-        //                             found_count += 1;
-        //                         }
-        //                         None => {
-        //                             // We've reached the end of the chain
-        //                             self.block_data[prev_idx as usize] = MapData::tail(new_idx);
-        //                             break;
-        //                         }
-        //                     }
-        //                 }
-
-        //                 // If we found the right position in the middle of the chain
-        //                 if found_count == count {
-        //                     let next = self.block_data[prev_idx as usize].get_next_index();
-        //                     self.block_data[prev_idx as usize] = MapData::tail(new_idx);
-        //                     if let Some(next) = next {
-        //                         self.block_data.push(MapData::tail(next));
-        //                     }
-        //                 }
-        //             }
-
-        //             // Update the chunk's block mask after everything else is set up
-        //             chunk.set_blocks(chunk.blocks() | (1 << idx));
-        //         }
-        //     },
-        //     None => {
-        //         println!("Generating chunk {:?} from block pos: {:?}", cp, pos);
-        //         let idx = Self::delta_pos_to_idx(delta_pos);
-        //         let voxels = 1<<idx;
-        //         let prefix_in_block_data_array = self.block_data.len();
-        //         self.block_data.push(map_data);
-        //         let chunk = voxel_chunk(cp, voxels, prefix_in_block_data_array as _);
-        //         self.voxel_chunks.push(chunk);
-        //     },
     }
 
     pub fn get_block(&self, pos: IVec3) -> Option<MapData> {

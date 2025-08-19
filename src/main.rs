@@ -1,4 +1,6 @@
 #![allow(unused, dead_code)]
+// Temporary code to allow static mutable references
+#![allow(static_mut_refs)]
 use std::{cell::OnceCell, ops::RangeInclusive};
 
 use bevy::{
@@ -52,6 +54,7 @@ fn setup(
     mut imgs: ResMut<Assets<Image>>,
     asset_server: Res<AssetServer>,
 ) {
+    
     commands.spawn(iyes_perf_ui::prelude::PerfUiDefaultEntries::default());
     let trans = Transform::from_xyz(0.0, 0.0, 2.0).looking_at(Vec3::ZERO, Vec3::Y);
 
@@ -60,55 +63,48 @@ fn setup(
         voxel_chunks: vec![voxel_chunk(0, 0, 0)],
         ..Default::default()
     };
+    let set_panic_h = false;
     unsafe {
         WORLD_PTR.set(world).unwrap();
-        std::panic::set_hook(std::boxed::Box::new(|info| {
-        eprintln!("Panic occurred: {:?}", info);
-        eprintln!("{}", info.payload().downcast_ref::<String>().unwrap_or(&"No message".to_string()));
-        eprintln!("World state at panic: {:?}", WORLD_PTR.get().unwrap());
-        eprintln!("Prettier: {}", WORLD_PTR.get().unwrap().pretty_print());
-    }));
-        dbg!(WORLD_PTR.get().unwrap());
+        if set_panic_h {
+            std::panic::set_hook(std::boxed::Box::new(|info| {
+                eprintln!("Panic occurred: {:?}", info);
+                eprintln!("{}", info.payload().downcast_ref::<String>().unwrap_or(&"No message".to_string()));
+                eprintln!("World state at panic: {:?}", WORLD_PTR.get().unwrap());
+                eprintln!("Prettier: {}", WORLD_PTR.get().unwrap().pretty_print());
+            }));
+        }
     }
     let mut world = unsafe { WORLD_PTR.get_mut().unwrap() };
 
     let perlin = Perlin::new(1);
-    for x in 0..16 {
+    for x in 0..world.root_size() as i32 {
         for y in 1..3 {
-            for z in 0..16 {
-                    // world.set_data_in_chunk(0, LocalPos::new(x as u8, y as u8, z as u8), MapData::Chunk(3));
-                    // assert_eq!(world.get_data_in_chunk(0, LocalPos::new(x as u8, y as u8, z as u8)), Some(MapData::Chunk(3)));
-
+            for z in 0..world.root_size() as i32 {
                 // if perlin.get([x as f64, y as f64, z as f64])>0.0 {
                 world.set_block(
-                    ivec3(x, y*5%15, z),
+                    ivec3(x, perlin.get([x as f64,z as f64]) as i32+y, z),
                     MapData::Block(((x + y + z) % 15) as u32),
                 );
-                // dbg!(world.get_block(ivec3(x * 2, y, z)), &world.block_data);
-                // }
-                // let mut layer = 1;
-                // if y ==4{layer=0;}
-                // world.set_block(ivec3(x,y,z), MapData::block(layer))
             }
         }
     }
 
-    println!("------------------------------------------------");
-    println!("World size: {:?}", world.root_size());
-    dbg!(&world.voxel_chunks.len());
-    dbg!(&world.block_data.len());
+    info!("World size: {:?}", world.root_size());
+    debug!("{}", &world.voxel_chunks.len());
+    debug!("{}", &world.block_data.len());
 
-    for x in 0..16 {
-        for y in 1..3 {
-            for z in 0..16 {
-                assert_eq!(
-                    world.get_block(ivec3(x, y*5%15, z)),
-                    Some(&MapData::Block(((x + y + z) % 15) as u32)).copied(),
-                    "{x},{y},{z}, {:?} {:?}", world.voxel_chunks, world.block_data
-                );
-            }
-        }
-    }
+    // for x in 0..16 {
+    //     for y in 1..3 {
+    //         for z in 0..16 {
+    //             assert_eq!(
+    //                 world.get_block(ivec3(x, y*5%15, z)),
+    //                 Some(&MapData::Block(((x + y + z) % 15) as u32)).copied(),
+    //                 "{x},{y},{z}, {:?} {:?}", world.voxel_chunks, world.block_data
+    //             );
+    //         }
+    //     }
+    // }
     // assert_eq!(world.get_block(ivec3(0, 10, 0)), None);
     // world.set_block(ivec3(0, 10, 0), MapData::Block(1));
     // assert_eq!(world.get_block(ivec3(0, 10, 0)), Some(&MapData::Block(1)).copied());
@@ -116,7 +112,7 @@ fn setup(
     // dbg!(&world);
 
     let center = vec3(-10., 10., -10.);
-    std::panic::take_hook();
+    if set_panic_h {std::panic::take_hook();}
     let mut world = unsafe { WORLD_PTR.take().unwrap() };
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::from_size(vec3(1.6, 0.9, 1.)))),
@@ -126,6 +122,7 @@ fn setup(
                 center,
                 direction: look_at(center, vec3(0., 0., -1.)),
                 fov: 90.,
+                root_size: world.root_size() as u32,
             },
             atlas: get_atlas_handle(imgs).unwrap(),
 
@@ -170,7 +167,7 @@ fn get_atlas_handle(mut imgs: ResMut<Assets<Image>>) -> Result<Handle<Image>> {
     let width = imgs_raw[0].width();
     let height = imgs_raw[0].height();
     let layers = imgs_raw.len() as u32;
-    println!("Atlas size: {}x{}x{}", width, height, layers);
+    info!("Atlas size: {}x{}x{}", width, height, layers);
     if imgs_raw
         .iter()
         .any(|img| img.width() != width || img.height() != height)
@@ -233,7 +230,13 @@ fn update(
     }
 
     let mut direction = Vec3::ZERO;
-    let speed = 4.;
+    let mut speed = 4.;
+    if kb_input.pressed(KeyCode::ShiftLeft) {
+        speed *= 4.;
+    }
+    if kb_input.pressed(KeyCode::AltLeft) {
+        speed *= 4.;
+    }
 
     if kb_input.pressed(KeyCode::KeyW) {
         direction += mat.camera.direction;
@@ -274,6 +277,7 @@ struct FragCamera {
     center: Vec3,
     direction: Vec3,
     fov: f32,
+    root_size: u32,
 }
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
@@ -302,6 +306,6 @@ struct CustomMaterial {
 
 impl Material for CustomMaterial {
     fn fragment_shader() -> ShaderRef {
-        "shaders/raytrace.wgsl".into()
+        "shaders/raytrace-compiled.wgsl".into()
     }
 }
