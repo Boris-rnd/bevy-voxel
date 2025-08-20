@@ -86,7 +86,7 @@ impl VoxelChunk {
         self.set_blocks(self.blocks() | (1 << local_pos.idx));
     }
     pub const fn get_block(&self, local_pos: LocalPos) -> bool {
-        (self.blocks() >> local_pos.idx)&1 == 1
+        (self.blocks() >> local_pos.idx) & 1 == 1
     }
 
     #[track_caller]
@@ -379,7 +379,8 @@ impl GameWorld {
             } else {
                 log::trace!(
                     "\n------Setting block at {:?} with data {:?}-------",
-                    pos, map_data
+                    pos,
+                    map_data
                 );
             }
             for depth in 1..100 {
@@ -406,7 +407,8 @@ impl GameWorld {
                             Some(data) => {
                                 log::trace!(
                                     "Block data already exists at {:?}, replacing with {:?}",
-                                    local_pos, map_data
+                                    local_pos,
+                                    map_data
                                 );
                                 self.set_data_in_chunk(curr_idx, local_pos.to_local_pos(), data);
                             }

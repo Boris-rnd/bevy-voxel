@@ -1,7 +1,7 @@
 // use bevy::{input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel}, prelude::*};
 
 // pub fn camera_movement(
-//     mut camera: Query<(&mut Transform, 
+//     mut camera: Query<(&mut Transform,
 //         &PanOrbitSettings,
 //         &mut PanOrbitState,), With<Camera>>,
 //     kb: Res<ButtonInput<KeyCode>>,
@@ -97,11 +97,6 @@
 
 // }
 
-
-
-
-
-
 // #[derive(Bundle, Default)]
 // pub struct PanOrbitCameraBundle {
 //     pub camera: Camera3dBundle,
@@ -143,7 +138,6 @@
 //     Zoom,
 // }
 
-
 // impl Default for PanOrbitState {
 //     fn default() -> Self {
 //         PanOrbitState {
@@ -168,7 +162,6 @@
 //         }
 //     }
 // }
-
 
 // use std::f32::consts::{PI, TAU};
 
@@ -210,7 +203,6 @@
 // //         // Check how much of each thing we need to apply.
 // //         // Accumulate values from motion and scroll,
 // //         // based on our configuration settings.
-
 
 // //         let mut total_orbit = Vec2::ZERO;
 // //         if settings.orbit_key.map(|key| kbd.pressed(key)).unwrap_or(false) {
@@ -290,3 +282,14 @@
 // //         }
 // //     }
 // // }
+
+use super::*;
+#[repr(C)]
+#[derive(ShaderType, Debug, Clone)]
+pub struct FragCamera {
+    pub center: Vec3,
+    pub direction: Vec3,
+    pub fov: f32,
+    pub root_size: u32,
+    pub accumulated_frames: u32,
+}

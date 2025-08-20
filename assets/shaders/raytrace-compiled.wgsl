@@ -1,8 +1,10 @@
 // The time since startup data is in the globals binding which is part of the mesh_view_bindings import
 // import bevy_pbr::mesh_view_bindings::globals;
-#import bevy_pbr::{forward_io::VertexOutput, mesh_view_bindings::globals};
+#import bevy_sprite::{mesh2d_vertex_output::VertexOutput, mesh2d_view_bindings::globals}; 
+// #import bevy_pbr::mesh_view_bindings::globals;
 
-
+// utils.wgsl
+// Utility functions for WGSL shaders
 fn div_euclid_v3(a: vec3<i32>, b: vec3<i32>) -> vec3<i32> {
     return vec3(div_euclid(a.x, b.x), div_euclid(a.y, b.y), div_euclid(a.z, b.z));
 }
@@ -20,7 +22,7 @@ fn rem_euclid_v3(a: vec3<i32>, b: vec3<i32>) -> vec3<i32> {
     return vec3(rem_euclid(a.x, b.x), rem_euclid(a.y, b.y), rem_euclid(a.z, b.z));
 }
 fn degrees_to_radians(deg: f32) -> f32 {
-    return deg/180.*3.14159;
+    return deg / 180. * 3.14159;
 }
 
 fn near_zero(v: vec3<f32>) -> bool {
@@ -29,16 +31,16 @@ fn near_zero(v: vec3<f32>) -> bool {
     return (abs(v.x) < s) && (abs(v.y) < s) && (abs(v.z) < s);
 }
 fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
-    return v - 2.*dot(v,n)*n;
+    return v - 2. * dot(v, n) * n;
 }
 
 var<private> rng_seed: f32 = 1.;
 
 fn random_unit_vector() -> vec3<f32> {
-    for(var i=0;i<5;i++) {
-        let p = vec3_rand(-1.,1.);
-        let lensq = dot(p,p);
-        if (1e-160 < lensq && lensq <= 1) {
+    for (var i = 0; i < 5; i++) {
+        let p = vec3_rand(-1., 1.);
+        let lensq = dot(p, p);
+        if 1e-160 < lensq && lensq <= 1 {
             return p / sqrt(lensq);
         }
     }
@@ -47,21 +49,19 @@ fn random_unit_vector() -> vec3<f32> {
 
 fn random_on_hemisphere(normal: vec3<f32>) -> vec3<f32> {
     let on_unit_sphere = random_unit_vector();
-    if (dot(on_unit_sphere, normal) > 0.0) { // In the same hemisphere as the normal
+    if dot(on_unit_sphere, normal) > 0.0 { // In the same hemisphere as the normal
         return on_unit_sphere;
-    }
-    else {
+    } else {
         return -on_unit_sphere;
     }
 }
 
 
 fn random_in_unit_disk() -> vec3<f32> {
-    for (var i=0;i<5;i++) {
-        let p = vec3(rand(-1.,1.), rand(-1.,1.), 0.);
-        if (dot(p,p) < 1.) {
+    for (var i = 0; i < 5; i++) {
+        let p = vec3(rand(-1., 1.), rand(-1., 1.), 0.);
+        if dot(p, p) < 1. {
             return p;
-
         }
     }
     return vec3(0.);
@@ -69,9 +69,9 @@ fn random_in_unit_disk() -> vec3<f32> {
 
 fn xorshift_rand(seed: u32) -> u32 {
     var rand = seed ^ (seed << 13);
-	rand = rand >> 17;
-	rand = rand << 5;
-	return rand;
+    rand = rand >> 17;
+    rand = rand << 5;
+    return rand;
 }
 fn xorshift_randf32(seed: f32) -> f32 {
     return f32(xorshift_rand(u32(seed)));
@@ -95,35 +95,35 @@ fn rand_01_wang() -> f32 {
 }
 
 fn rand_01() -> f32 {
-    let r = abs(fract(sin(xorshift_randf32((sin(rng_seed/3.3) * 43758.5453)))));
+    let r = abs(fract(sin(xorshift_randf32((sin(rng_seed / 3.3) * 43758.5453)))));
     rng_seed = r;
     return r;
 }
 fn rand(min: f32, max: f32) -> f32 {
-    return min + rand_01_wang()*(max-min);
+    return min + rand_01_wang() * (max - min);
 }
 fn vec3_rand(min: f32, max: f32) -> vec3<f32> {
-    return vec3(rand(min, max),rand(min, max),rand(min, max));
+    return vec3(rand(min, max), rand(min, max), rand(min, max));
 }
 
 fn set_face_normal(ray: Ray, outward_normal: vec3<f32>, r: HitRecord) -> HitRecord {
     var rec = r;
     rec.front_face = dot(ray.dir, outward_normal) < 0;
     rec.normal = outward_normal;
-    if (!rec.front_face) {
+    if !rec.front_face {
         rec.normal = -outward_normal;
     }
     return rec;
 }
 
 fn cmple(v1: vec3<f32>, v2: vec3<f32>) -> vec3<bool> {
-    return vec3(v1.x <= v2.x,v1.y <= v2.y,v1.z <= v2.z);
+    return vec3(v1.x <= v2.x, v1.y <= v2.y, v1.z <= v2.z);
 }
 fn cmple_to_unit(v1: vec3<f32>, v2: vec3<f32>) -> vec3<f32> {
     var v = vec3(0.);
-    if v1.x<=v2.x {v.x=1.;}
-    if v1.y<=v2.y {v.y=1.;}
-    if v1.z<=v2.z {v.z=1.;}
+    if v1.x <= v2.x {v.x = 1.;}
+    if v1.y <= v2.y {v.y = 1.;}
+    if v1.z <= v2.z {v.z = 1.;}
     return v;
 }
 // fn cmple(v1: vec3<i32>, v2: vec3<i32>) -> vec3<bool> {
@@ -156,27 +156,24 @@ struct DDAResult {
 }
 fn branchless_dda(sideDist: vec3<f32>, pos: vec3<i32>, deltaDist: vec3<f32>, rayStep: vec3<i32>) -> DDAResult {
     var res = DDAResult(sideDist, pos, vec3(0.));
-    if (sideDist.x < sideDist.y) {
-        if (sideDist.x < sideDist.z) {
-            res.sideDist.x = sideDist.x+deltaDist.x;
-            res.pos.x = pos.x+rayStep.x;
+    if sideDist.x < sideDist.y {
+        if sideDist.x < sideDist.z {
+            res.sideDist.x = sideDist.x + deltaDist.x;
+            res.pos.x = pos.x + rayStep.x;
             res.mask = vec3(1., 0., 0.);
-        }
-        else {
-            res.sideDist.z = sideDist.z+deltaDist.z;
-            res.pos.z = pos.z+rayStep.z;
+        } else {
+            res.sideDist.z = sideDist.z + deltaDist.z;
+            res.pos.z = pos.z + rayStep.z;
             res.mask = vec3(0., 0., 1.);
         }
-    }
-    else {
-        if (sideDist.y < sideDist.z) {
-            res.sideDist.y = sideDist.y+deltaDist.y;
-            res.pos.y = pos.y+rayStep.y;
+    } else {
+        if sideDist.y < sideDist.z {
+            res.sideDist.y = sideDist.y + deltaDist.y;
+            res.pos.y = pos.y + rayStep.y;
             res.mask = vec3(0., 1., 0.);
-        }
-        else {
-            res.sideDist.z = sideDist.z+deltaDist.z;
-            res.pos.z = pos.z+rayStep.z;
+        } else {
+            res.sideDist.z = sideDist.z + deltaDist.z;
+            res.pos.z = pos.z + rayStep.z;
             res.mask = vec3(0., 0., 1.);
         }
     }
@@ -195,32 +192,23 @@ fn root_chunk_size() -> u32 {
 fn count_ones(n: u32) -> u32 {
     var count = 0u;
     var x = n;
-    while (x != 0u) {
+    while x != 0u {
         count += x & 1u;
         x >>= 1u;
     }
     return count;
 }
 
-
-@group(2) @binding(1) var<uniform> cam: Camera;
-@group(2) @binding(2) var<storage, read> spheres: array<Sphere>;
-@group(2) @binding(3) var<storage, read> boxes: array<Box>;
-@group(2) @binding(6) var<storage, read> voxels: array<Voxel>;
-@group(2) @binding(7) var<storage, read> voxel_chunks: array<VoxelChunk>;
-@group(2) @binding(8) var<storage, read> block_data: array<MapData>;
-@group(2) @binding(4) var base_color_texture: texture_2d_array<f32>;
-@group(2) @binding(5) var base_color_sampler: sampler;
-
-
-@group(2) @binding(100) var<uniform> img_size: vec2<f32>;
-
+fn at(ray: Ray, t: f32) -> vec3<f32> {
+    return ray.orig + t * ray.dir;
+}
 
 struct Camera {
     center: vec3<f32>,
     direction: vec3<f32>,
     fov: f32,
     root_chunk_size: u32,
+    accum_frames: u32,
 }
 struct Sphere {
     pos: vec3<f32>,
@@ -248,10 +236,6 @@ struct HitRecord {
     color: vec3<f32>,
 }
 
-
-fn at(ray: Ray, t: f32) -> vec3<f32> {
-    return ray.orig + t*ray.dir;
-}
 
 struct MapData {
     // 2 first bits = type:
@@ -284,6 +268,23 @@ struct HitRecordResult {
     valid: bool,
     rec: HitRecord
 }
+// #import "shaders/utils.wgsl"::{depth_to_chunk_size, root_chunk_size, count_ones, branchless_dda, at};
+
+@group(2) @binding(1) var<uniform> cam: Camera;
+@group(2) @binding(2) var<storage, read> spheres: array<Sphere>;
+@group(2) @binding(3) var<storage, read> boxes: array<Box>;
+@group(2) @binding(6) var<storage, read> voxels: array<Voxel>;
+@group(2) @binding(7) var<storage, read> voxel_chunks: array<VoxelChunk>;
+@group(2) @binding(8) var<storage, read> block_data: array<MapData>;
+@group(2) @binding(4) var base_color_texture: texture_2d_array<f32>;
+@group(2) @binding(5) var base_color_sampler: sampler;
+// @group(2) @binding(9) var accumulated_img: texture_storage_2d<rgba32float, read>;
+// @group(2) @binding(10) var accumulated_img2: texture_storage_2d<rgba32float, write>;
+
+
+@group(2) @binding(100) var<uniform> img_size: vec2<f32>;
+
+
 
 struct DataResult {
     data: u32,
@@ -292,7 +293,7 @@ struct DataResult {
 /// Returns root chunk data if not found
 /// max depth starts at 1
 /// Returns block_data, so also has the ty in first 2 bits
-fn get_data_in_chunk(pos: vec3<i32>, chk: VoxelChunk, par_pos: vec3<i32>, dep:u32, max_depth: u32) -> DataResult {
+fn get_data_in_chunk(pos: vec3<i32>, chk: VoxelChunk, par_pos: vec3<i32>, dep: u32, max_depth: u32) -> DataResult {
     // if pos.x==1 {return u32(1);}
     // else {return u32(4294967295);} 
     var chunk = chk;
@@ -301,41 +302,40 @@ fn get_data_in_chunk(pos: vec3<i32>, chk: VoxelChunk, par_pos: vec3<i32>, dep:u3
     var end_depth = dep;
     var curr_data = 1u; // Root chunk
     var prev_idx = 0u;
-    for (var depth = dep;depth<=max_depth;depth++) {
+    for (var depth = dep; depth <= max_depth; depth++) {
         end_depth = depth;
         let chunk_size = i32(depth_to_chunk_size(depth-1));
-        parent_pos += ((vec3<i32>(vec3(prev_idx & 3, (prev_idx>>2) & 3, (prev_idx>>4) & 3)))*chunk_size);
-        local_pos = div_euclid_v3(pos - parent_pos, vec3<i32>(chunk_size>>2));
-        var idx = u32(local_pos.x)+(u32(local_pos.y)<<2u)+u32((local_pos.z)<<4u);
+        parent_pos += ((vec3<i32>(vec3(prev_idx & 3, (prev_idx >> 2) & 3, (prev_idx >> 4) & 3))) * chunk_size);
+        local_pos = div_euclid_v3(pos - parent_pos, vec3<i32>(chunk_size >> 2));
+        var idx = u32(local_pos.x) + (u32(local_pos.y) << 2u) + u32((local_pos.z) << 4u);
         var mask = chunk.inner.x;
         var set_bits = u32(0);
         if any(local_pos >= vec3(4) || local_pos < vec3(0)) {return DataResult(0, 0);}
         prev_idx = idx;
-        if idx>=32 {
+        if idx >= 32 {
             mask = chunk.inner.y;
             idx = idx-32;
-            set_bits = count_ones(chunk.inner.x)+count_ones((((1u << idx) - 1) & chunk.inner.y));
+            set_bits = count_ones(chunk.inner.x) + count_ones((((1u << idx) - 1) & chunk.inner.y));
         } else {
             set_bits = count_ones((((1u << idx) - 1) & chunk.inner.x));
         }
-        if (mask&(u32(1)<<idx))==0 {
+        if (mask & (u32(1) << idx)) == 0 {
             break;
         }
-        if u32(chunk.prefix_in_block_data_array+set_bits)>arrayLength(&block_data) {
+        if u32(chunk.prefix_in_block_data_array + set_bits) > arrayLength(&block_data) {
             break; // Out of bounds
         }
-        curr_data = block_data[chunk.prefix_in_block_data_array+set_bits].data;
-        let ty = curr_data&3;
-        if (ty == 2) { // Block
+        curr_data = block_data[chunk.prefix_in_block_data_array + set_bits].data;
+        let ty = curr_data & 3;
+        if ty == 2 { // Block
             return DataResult(curr_data, u32(depth)); // Return texture id
-        } else if (ty == 1) { // Chunk
+        } else if ty == 1 { // Chunk
             // return set_bits; // Return texture id
-            chunk = voxel_chunks[curr_data>>2];
+            chunk = voxel_chunks[curr_data >> 2];
         } else { // Error
             // return u32(4294967295); // u32::MAX
             break;
         }
-        
     }
     // Returns root chunk if nothing found or latest chunk
     return DataResult(curr_data, u32(end_depth));
@@ -349,7 +349,7 @@ fn hit(ray: Ray) -> HitRecordResult {
 
     // Intersect ray with root AABB
     var t = hit_box_t(ray, world_min, world_max);
-    if (t == -1.0) {
+    if t == -1.0 {
         return miss;
     }
 
@@ -371,7 +371,7 @@ fn hit(ray: Ray) -> HitRecordResult {
     // Main traversal
     // Hard cap to avoid infinite loops in degenerate cases
     for (var iter = 0; iter < 500; iter = iter + 1) {
-        if any(posf < world_min) || any(posf > world_max ) {
+        if any(posf < world_min) || any(posf > world_max) {
             break;
         }
 
@@ -380,17 +380,18 @@ fn hit(ray: Ray) -> HitRecordResult {
         let res = get_data_in_chunk(posi, root, vec3<i32>(0), 1u, 6u);
 
         // No data anywhere -> miss
-        if (res.data == 0u && res.depth == 0u) {
+        if res.data == 0u && res.depth == 0u {
             break;
         }
 
         let ty = res.data & 3u;
 
         // Hit a solid block -> do precise block AABB hit & return
-        if (ty == 2u) {
+        if ty == 2u {
             return hit_box_gen(
                 ray,
-                Box(vec3<f32>(posi), vec3<f32>(posi) + vec3<f32>(1.0), (u32(res.data>>2)))); // res.data>>2
+                Box(vec3<f32>(posi), vec3<f32>(posi) + vec3<f32>(1.0), (u32(res.data >> 2)))
+            ); // res.data>>2
         }
 
         // Otherwise we’re inside a (non-empty) chunk cell: step to next boundary
@@ -428,19 +429,18 @@ fn hit(ray: Ray) -> HitRecordResult {
 
         // Advance along ray to the selected boundary
         posf = posf + dir * (tStep + eps);
-
     }
 
     return miss;
 }
 fn hit_box_t(ray: Ray, bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
-    let t135 = (bmax-ray.orig)/ray.dir;
-    let t246 = (bmin-ray.orig)/ray.dir;
+    let t135 = (bmax - ray.orig) / ray.dir;
+    let t246 = (bmin - ray.orig) / ray.dir;
 
     let tmin = max(max(min(t135.x, t246.x), min(t135.y, t246.y)), min(t135.z, t246.z));
     let tmax = min(min(max(t135.x, t246.x), max(t135.y, t246.y)), max(t135.z, t246.z));
 
-    if (tmin > tmax || tmax < 0) {
+    if tmin > tmax || tmax < 0 {
         return -1.0;
     }
     return tmin;
@@ -450,72 +450,64 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
     var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
 
     var t = hit_box_t(ray, box.min, box.max);
-    if t==-1.0 {
+    if t == -1.0 {
         return res; // No hit
     }
     res.valid = true;
     res.rec.p = at(ray, t);
-    let center = (box.min+box.max)/2.;
-    var circle_normal = center-res.rec.p;
-    
+    let center = (box.min + box.max) / 2.;
+    var circle_normal = center - res.rec.p;
+
     var uv: vec2<f32>;
     var data: u32 = box.texture_id;
     if circle_normal.x > abs(circle_normal.y) && circle_normal.x > abs(circle_normal.z) {
         uv = (circle_normal).zy;
         circle_normal = vec3(1., 0., 0.);
-    }
-    else if circle_normal.x < -abs(circle_normal.y) && circle_normal.x < -abs(circle_normal.z) {
+    } else if circle_normal.x < -abs(circle_normal.y) && circle_normal.x < -abs(circle_normal.z) {
         uv = (circle_normal).zy;
         circle_normal = vec3(-1., 0., 0.);
-    }
-    
-    else if circle_normal.z > abs(circle_normal.y) && circle_normal.z > abs(circle_normal.x) {
+    } else if circle_normal.z > abs(circle_normal.y) && circle_normal.z > abs(circle_normal.x) {
         uv = (circle_normal).xy;
         circle_normal = vec3(0., 0., 1.);
-    }
-    else if circle_normal.z < -abs(circle_normal.y) && circle_normal.z < -abs(circle_normal.x) {
+    } else if circle_normal.z < -abs(circle_normal.y) && circle_normal.z < -abs(circle_normal.x) {
         uv = (circle_normal).xy;
         circle_normal = vec3(0., 0., -1.);
-    }
-    
-    else if circle_normal.y > abs(circle_normal.x) && circle_normal.y > abs(circle_normal.z) {
+    } else if circle_normal.y > abs(circle_normal.x) && circle_normal.y > abs(circle_normal.z) {
         uv = (circle_normal).xz;
         circle_normal = vec3(0., 1., 0.);
         // data = 1;
-    }
-    else if circle_normal.y < -abs(circle_normal.x) && circle_normal.y < -abs(circle_normal.z) {
+    } else if circle_normal.y < -abs(circle_normal.x) && circle_normal.y < -abs(circle_normal.z) {
         uv = (circle_normal).xz;
         circle_normal = vec3(0., -1., 0.);
         // data = 1;
-    }
-    else {
+    } else {
         circle_normal = vec3(1., 1.5, 1.);
     }
     res.rec.normal = circle_normal;
     res.rec.t = t;
     res.rec.front_face = false;
-    if data>10 {
-        res.rec.color = vec3(f32(data)/255., 0., 0.);
+    if data > 10 {
+        res.rec.color = vec3(f32(data) / 255., 0., 0.);
     } else {
-        res.rec.color = textureSample(base_color_texture, base_color_sampler, (uv)+vec2(0.5), data).xyz;
+        res.rec.color = textureSample(base_color_texture, base_color_sampler, (uv) + vec2(0.5), data).xyz;
     }
     return res;
 }
 fn ray_color(ray2: Ray) -> vec3<f32> {
     var ray = ray2;
-    
-    let unit_direction = normalize(ray.dir);
-    let a = 0.5*(unit_direction.y + 1.0);
-    var c = (1.0-a)*vec3(1.0, 1.0, 1.0) + a*vec3(0.5, 0.7, 1.0);
 
-    for (var i =1;i<200;i+=10) {
+    let unit_direction = normalize(ray.dir);
+    let a = 0.5 * (unit_direction.y + 1.0);
+    var c = (1.0 - a) * vec3(1.0, 1.0, 1.0) + a * vec3(0.5, 0.7, 1.0);
+
+    for (var i = 1; i < 200; i += 10) {
         var res = hit(ray);
-        if (res.valid) {
-            var direction = res.rec.normal + random_unit_vector()*0.5;
+        if res.valid {
+            var direction = res.rec.normal + random_unit_vector() * 0.5;
             // var direction = reflect(ray.dir, res.rec.normal) + random_unit_vector()*0.2;
-            if (near_zero(direction)){direction = res.rec.normal;}
-            c = c*res.rec.color;//*(1./f32(i));
-            
+            if near_zero(direction) {direction = res.rec.normal;}
+            c = c * res.rec.color;//*(1./f32(i));
+
             ray = Ray(res.rec.p, direction);
             return c;
         } else {
@@ -527,67 +519,71 @@ fn ray_color(ray2: Ray) -> vec3<f32> {
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let lookfrom = cam.center;     // Point camera is looking from
-    let lookat   = cam.center+cam.direction;// Point camera is looking at
-    let vup      = vec3(0.,1.,0.); // Camera-relative "up" direction
+    let lookat = cam.center + cam.direction;// Point camera is looking at
+    let vup = vec3(0., 1., 0.); // Camera-relative "up" direction
     let defocus_angle = 5.;
 
     let vfov = cam.fov;
-    
+
     let focal_length = 3.;
     let theta = degrees_to_radians(vfov);
-    let h = tan(theta/2);
+    let h = tan(theta / 2);
     let viewport_height = 2. * h * focal_length;
-    let viewport_width = viewport_height * (img_size.x/img_size.y);
+    let viewport_width = viewport_height * (img_size.x / img_size.y);
 
     let w = normalize(lookfrom - lookat);
     let u = normalize(cross(vup, w));
     let v = cross(w, u);
-    
-    let viewport_u = viewport_width*u; // Vector across viewport horizontal edge
-    let viewport_v = viewport_height*(-v); // Vector down viewport vertical edge
+
+    let viewport_u = viewport_width * u; // Vector across viewport horizontal edge
+    let viewport_v = viewport_height * (v); // Vector down viewport vertical edge
     
     // Calculate the horizontal and vertical delta vectors from pixel to pixel.
     let pixel_delta_u = viewport_u / img_size.x;
     let pixel_delta_v = viewport_v / img_size.y;
 
     // Calculate the location of the upper left pixel.
-    let viewport_upper_left = lookfrom - focal_length*w - viewport_u/2 - viewport_v/2;
+    let viewport_upper_left = lookfrom - focal_length * w - viewport_u / 2 - viewport_v / 2;
     let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
-    
+
     let i = in.uv.x * img_size.x;
-    let j = (1.-in.uv.y) * img_size.y;
+    let j = (1. - in.uv.y) * img_size.y;
 
     let defocus_radius = focal_length * tan(degrees_to_radians(defocus_angle / 2));
     let defocus_disk_u = u * defocus_radius;
     let defocus_disk_v = v * defocus_radius;
 
     let focus = false;
-    
+
     let samples_per_pixel = 1;
     var antialiasing = false;
-    if samples_per_pixel>1 {antialiasing=true;}
+    if samples_per_pixel > 1 {antialiasing = true;}
     var c = vec3(0.);
-    rng_seed = globals.time+(in.uv.x+in.uv.y*10.);
-    for (var s=0;s<samples_per_pixel;s++) {
+    rng_seed = globals.time + (in.uv.x + in.uv.y * 10.);
+    for (var s = 0; s < samples_per_pixel; s++) {
         var offset = vec3(0.);
-        if samples_per_pixel>1 {
+        if samples_per_pixel > 1 {
             let offset_x = rand(-0.5, 0.5);
             let offset_y = rand(-0.5, 0.5);
             offset = vec3(offset_x, offset_y, 0.);
         }
-        let pixel_center = pixel00_loc + ((i+offset.x) * pixel_delta_u) + ((j+offset.y) * pixel_delta_v);
+        let pixel_center = pixel00_loc + ((i + offset.x) * pixel_delta_u) + ((j + offset.y) * pixel_delta_v);
         var orig = lookfrom;
-        if (focus) {
+        if focus {
             let p = random_in_unit_disk();
             orig += (p.x * defocus_disk_u) + (p.y * defocus_disk_v);
         }
-        let r = Ray(orig, pixel_center-lookfrom);
-        c += ray_color(r)/f32(samples_per_pixel);
+        let r = Ray(orig, pixel_center - lookfrom);
+        c += ray_color(r) / f32(samples_per_pixel);
     }
     
 
 
 
     // c = vec3(rand_05_centered());
-    return vec4<f32>(c, 1.0);
+    let texcoord = vec2(i32(in.uv.x * img_size.x), i32(in.uv.y * img_size.y));
+    var out = vec4<f32>(c, 1.0);
+    // out = (textureLoad(accumulated_img, texcoord) * f32(cam.accum_frames) + out) / f32(cam.accum_frames + 1);
+    // textureStore(accumulated_img2, texcoord, out);
+    return out;
 }

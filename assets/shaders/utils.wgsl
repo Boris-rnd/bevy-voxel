@@ -1,4 +1,5 @@
-
+// utils.wgsl
+// Utility functions for WGSL shaders
 fn div_euclid_v3(a: vec3<i32>, b: vec3<i32>) -> vec3<i32> {
     return vec3(div_euclid(a.x, b.x), div_euclid(a.y, b.y), div_euclid(a.z, b.z));
 }
@@ -16,7 +17,7 @@ fn rem_euclid_v3(a: vec3<i32>, b: vec3<i32>) -> vec3<i32> {
     return vec3(rem_euclid(a.x, b.x), rem_euclid(a.y, b.y), rem_euclid(a.z, b.z));
 }
 fn degrees_to_radians(deg: f32) -> f32 {
-    return deg/180.*3.14159;
+    return deg / 180. * 3.14159;
 }
 
 fn near_zero(v: vec3<f32>) -> bool {
@@ -25,16 +26,16 @@ fn near_zero(v: vec3<f32>) -> bool {
     return (abs(v.x) < s) && (abs(v.y) < s) && (abs(v.z) < s);
 }
 fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
-    return v - 2.*dot(v,n)*n;
+    return v - 2. * dot(v, n) * n;
 }
 
 var<private> rng_seed: f32 = 1.;
 
 fn random_unit_vector() -> vec3<f32> {
-    for(var i=0;i<5;i++) {
-        let p = vec3_rand(-1.,1.);
-        let lensq = dot(p,p);
-        if (1e-160 < lensq && lensq <= 1) {
+    for (var i = 0; i < 5; i++) {
+        let p = vec3_rand(-1., 1.);
+        let lensq = dot(p, p);
+        if 1e-160 < lensq && lensq <= 1 {
             return p / sqrt(lensq);
         }
     }
@@ -43,21 +44,19 @@ fn random_unit_vector() -> vec3<f32> {
 
 fn random_on_hemisphere(normal: vec3<f32>) -> vec3<f32> {
     let on_unit_sphere = random_unit_vector();
-    if (dot(on_unit_sphere, normal) > 0.0) { // In the same hemisphere as the normal
+    if dot(on_unit_sphere, normal) > 0.0 { // In the same hemisphere as the normal
         return on_unit_sphere;
-    }
-    else {
+    } else {
         return -on_unit_sphere;
     }
 }
 
 
 fn random_in_unit_disk() -> vec3<f32> {
-    for (var i=0;i<5;i++) {
-        let p = vec3(rand(-1.,1.), rand(-1.,1.), 0.);
-        if (dot(p,p) < 1.) {
+    for (var i = 0; i < 5; i++) {
+        let p = vec3(rand(-1., 1.), rand(-1., 1.), 0.);
+        if dot(p, p) < 1. {
             return p;
-
         }
     }
     return vec3(0.);
@@ -65,9 +64,9 @@ fn random_in_unit_disk() -> vec3<f32> {
 
 fn xorshift_rand(seed: u32) -> u32 {
     var rand = seed ^ (seed << 13);
-	rand = rand >> 17;
-	rand = rand << 5;
-	return rand;
+    rand = rand >> 17;
+    rand = rand << 5;
+    return rand;
 }
 fn xorshift_randf32(seed: f32) -> f32 {
     return f32(xorshift_rand(u32(seed)));
@@ -91,35 +90,35 @@ fn rand_01_wang() -> f32 {
 }
 
 fn rand_01() -> f32 {
-    let r = abs(fract(sin(xorshift_randf32((sin(rng_seed/3.3) * 43758.5453)))));
+    let r = abs(fract(sin(xorshift_randf32((sin(rng_seed / 3.3) * 43758.5453)))));
     rng_seed = r;
     return r;
 }
 fn rand(min: f32, max: f32) -> f32 {
-    return min + rand_01_wang()*(max-min);
+    return min + rand_01_wang() * (max - min);
 }
 fn vec3_rand(min: f32, max: f32) -> vec3<f32> {
-    return vec3(rand(min, max),rand(min, max),rand(min, max));
+    return vec3(rand(min, max), rand(min, max), rand(min, max));
 }
 
 fn set_face_normal(ray: Ray, outward_normal: vec3<f32>, r: HitRecord) -> HitRecord {
     var rec = r;
     rec.front_face = dot(ray.dir, outward_normal) < 0;
     rec.normal = outward_normal;
-    if (!rec.front_face) {
+    if !rec.front_face {
         rec.normal = -outward_normal;
     }
     return rec;
 }
 
 fn cmple(v1: vec3<f32>, v2: vec3<f32>) -> vec3<bool> {
-    return vec3(v1.x <= v2.x,v1.y <= v2.y,v1.z <= v2.z);
+    return vec3(v1.x <= v2.x, v1.y <= v2.y, v1.z <= v2.z);
 }
 fn cmple_to_unit(v1: vec3<f32>, v2: vec3<f32>) -> vec3<f32> {
     var v = vec3(0.);
-    if v1.x<=v2.x {v.x=1.;}
-    if v1.y<=v2.y {v.y=1.;}
-    if v1.z<=v2.z {v.z=1.;}
+    if v1.x <= v2.x {v.x = 1.;}
+    if v1.y <= v2.y {v.y = 1.;}
+    if v1.z <= v2.z {v.z = 1.;}
     return v;
 }
 // fn cmple(v1: vec3<i32>, v2: vec3<i32>) -> vec3<bool> {
@@ -152,27 +151,24 @@ struct DDAResult {
 }
 fn branchless_dda(sideDist: vec3<f32>, pos: vec3<i32>, deltaDist: vec3<f32>, rayStep: vec3<i32>) -> DDAResult {
     var res = DDAResult(sideDist, pos, vec3(0.));
-    if (sideDist.x < sideDist.y) {
-        if (sideDist.x < sideDist.z) {
-            res.sideDist.x = sideDist.x+deltaDist.x;
-            res.pos.x = pos.x+rayStep.x;
+    if sideDist.x < sideDist.y {
+        if sideDist.x < sideDist.z {
+            res.sideDist.x = sideDist.x + deltaDist.x;
+            res.pos.x = pos.x + rayStep.x;
             res.mask = vec3(1., 0., 0.);
-        }
-        else {
-            res.sideDist.z = sideDist.z+deltaDist.z;
-            res.pos.z = pos.z+rayStep.z;
+        } else {
+            res.sideDist.z = sideDist.z + deltaDist.z;
+            res.pos.z = pos.z + rayStep.z;
             res.mask = vec3(0., 0., 1.);
         }
-    }
-    else {
-        if (sideDist.y < sideDist.z) {
-            res.sideDist.y = sideDist.y+deltaDist.y;
-            res.pos.y = pos.y+rayStep.y;
+    } else {
+        if sideDist.y < sideDist.z {
+            res.sideDist.y = sideDist.y + deltaDist.y;
+            res.pos.y = pos.y + rayStep.y;
             res.mask = vec3(0., 1., 0.);
-        }
-        else {
-            res.sideDist.z = sideDist.z+deltaDist.z;
-            res.pos.z = pos.z+rayStep.z;
+        } else {
+            res.sideDist.z = sideDist.z + deltaDist.z;
+            res.pos.z = pos.z + rayStep.z;
             res.mask = vec3(0., 0., 1.);
         }
     }
@@ -191,9 +187,79 @@ fn root_chunk_size() -> u32 {
 fn count_ones(n: u32) -> u32 {
     var count = 0u;
     var x = n;
-    while (x != 0u) {
+    while x != 0u {
         count += x & 1u;
         x >>= 1u;
     }
     return count;
+}
+
+fn at(ray: Ray, t: f32) -> vec3<f32> {
+    return ray.orig + t * ray.dir;
+}
+
+struct Camera {
+    center: vec3<f32>,
+    direction: vec3<f32>,
+    fov: f32,
+    root_chunk_size: u32,
+    accum_frames: u32,
+}
+struct Sphere {
+    pos: vec3<f32>,
+    rad: f32,
+    color: vec3<f32>,
+}
+struct Ray {
+    orig: vec3<f32>,
+    dir: vec3<f32>,
+}
+struct VoxelChunk {
+    idx_in_parent: u32,
+    inner: vec2<u32>,
+    prefix_in_block_data_array: u32,
+}
+struct Voxel {
+    pos: vec3<f32>,
+    texture_id: u32,
+}
+struct HitRecord {
+    p: vec3<f32>,
+    normal: vec3<f32>,
+    t: f32,
+    front_face: bool,
+    color: vec3<f32>,
+}
+
+
+struct MapData {
+    // 2 first bits = type:
+    // 00=block
+    // 01=chunk
+    // 10=entity
+    // 11=Tail
+    data: u32,
+}
+
+
+struct Box {
+    min: vec3<f32>,
+    max: vec3<f32>,
+    texture_id: u32,
+}
+
+
+fn local_pos(chunk: VoxelChunk) -> u32 {
+    // Returns the local position of the chunk in the world
+    return chunk.idx_in_parent;
+}
+fn ivec3_local_pos(chunk: VoxelChunk) -> vec3<i32> {
+    // Returns the local position of the chunk in the world as an ivec3
+    return vec3<i32>(vec3(chunk.idx_in_parent % 4, (chunk.idx_in_parent / 4) % 4, (chunk.idx_in_parent / 16) % 4));
+}
+
+// No tuples
+struct HitRecordResult {
+    valid: bool,
+    rec: HitRecord
 }
