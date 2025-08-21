@@ -53,7 +53,7 @@ impl CustomMaterial {
                 center,
                 direction: vec3(0., 0., -1.)-center,
                 fov: 90.,
-                root_size: world.root_size() as u32,
+                root_max_depth: world.root_max_depth(),
                 accumulated_frames: 0,
             },
             atlas: get_atlas_handle(&mut imgs).unwrap(),

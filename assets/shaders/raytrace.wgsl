@@ -113,7 +113,7 @@ fn hit(ray: Ray) -> HitRecordResult {
 
         // Query world at current integer voxel position
         let posi = vec3<i32>(posf);
-        let res = get_data_in_chunk(posi, root, vec3<i32>(0), 1u, 6u);
+        let res = get_data_in_chunk(posi, root, vec3<i32>(0), 1u, cam.root_max_depth);
 
         // No data anywhere -> miss
         if res.data == 0u && res.depth == 0u {

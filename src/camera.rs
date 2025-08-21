@@ -290,6 +290,6 @@ pub struct FragCamera {
     pub center: Vec3,
     pub direction: Vec3,
     pub fov: f32,
-    pub root_size: u32,
+    pub root_max_depth: u32,
     pub accumulated_frames: u32,
 }

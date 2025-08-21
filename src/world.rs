@@ -364,7 +364,10 @@ impl GameWorld {
         &self.voxel_chunks[0]
     }
     pub fn root_size(&self) -> usize {
-        4u32.pow(4) as _
+        4usize.pow(self.root_max_depth())
+    }
+    pub fn root_max_depth(&self) -> u32 {
+        4
     }
     fn block_iter_inner(&mut self, pos: IVec3, map_data: Option<MapData>) -> Option<MapData> {
         if pos.x < self.root_size() as i32

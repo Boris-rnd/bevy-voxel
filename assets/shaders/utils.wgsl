@@ -181,7 +181,7 @@ fn depth_to_chunk_size(depth: u32) -> u32 {
 }
 
 fn root_chunk_size() -> u32 {
-    return cam.root_chunk_size;
+    return u32(pow(4.0, f32(cam.root_max_depth)));
 }
 
 fn count_ones(n: u32) -> u32 {
@@ -202,7 +202,7 @@ struct Camera {
     center: vec3<f32>,
     direction: vec3<f32>,
     fov: f32,
-    root_chunk_size: u32,
+    root_max_depth: u32,
     accum_frames: u32,
 }
 struct Sphere {
