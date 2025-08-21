@@ -8,6 +8,22 @@ fn div_euclid(a: i32, b: i32) -> i32 {
     let q = a / b;
     let r = a % b;
     return q - select(0, 1, (r < 0) && (b > 0)) + select(0, 1, (r > 0) && (b < 0));
+
+}fn div_euclid_f32(a: f32, b: f32) -> f32 {
+    let q = floor(a / b);
+    return select(q - 1.0, q, a >= 0.0);
+
+    // let q = a / b;
+    // let r = a % b;
+    // return q - select(0., 1., (r < 0.) && (b > 0.)) + select(0., 1., (r > 0) && (b < 0));
+}
+
+fn div_euclid_f32_v3(a: vec3<f32>, b: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(
+        div_euclid_f32(a.x, b.x),
+        div_euclid_f32(a.y, b.y),
+        div_euclid_f32(a.z, b.z),
+    );
 }
 fn rem_euclid(a: i32, b: i32) -> i32 {
     let r = a % b;
@@ -182,6 +198,43 @@ fn depth_to_chunk_size(depth: u32) -> u32 {
 
 fn root_chunk_size() -> u32 {
     return u32(pow(4.0, f32(cam.root_max_depth)));
+}
+
+/// Returns u32::MAX if not found
+fn get_data_idx_in_chunk(chunk: VoxelChunk, _idx: u32) -> u32 {
+    var mask = chunk.inner.x;
+    var set_bits = u32(0);
+    var idx = _idx;
+    if idx >= 32 {
+        mask = chunk.inner.y;
+        idx = idx-32;
+        set_bits = count_ones(chunk.inner.x) + count_ones((((1u << idx) - 1) & chunk.inner.y));
+    } else {
+        set_bits = count_ones((((1u << idx) - 1) & chunk.inner.x));
+    }
+    if (mask & (u32(1) << idx)) == 0 {
+        return 4294967295u;
+    }
+    return set_bits+chunk.prefix_in_block_data_array;
+}
+/// Returns u32::MAX if not found / invalid idx in tails chain or from start
+/// Returns block data, not idx !
+fn get_block_data_follow_tails(idx: u32) -> u32 {
+    var curr_idx = u32(idx);
+    for (var i=0;i<100;i++) {
+        if (curr_idx >= arrayLength(&block_data)) {break;}
+        let curr_data = block_data[curr_idx].data;
+        if (curr_data&3u) == 3u { // Tail
+            curr_idx = u32(curr_data >> 2);
+        } else {
+            return curr_data;
+        }
+    }
+    return 4294967295u;
+}
+
+fn valid_res(color: vec3<f32>) -> HitRecordResult {
+    return HitRecordResult(true, HitRecord(vec3(0.), vec3(0.), 0., false, color));
 }
 
 fn count_ones(n: u32) -> u32 {

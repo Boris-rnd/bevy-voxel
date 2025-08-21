@@ -43,25 +43,15 @@ fn get_data_in_chunk(pos: vec3<i32>, chk: VoxelChunk, par_pos: vec3<i32>, dep: u
         let chunk_size = i32(depth_to_chunk_size(depth-1));
         parent_pos += ((vec3<i32>(vec3(prev_idx & 3, (prev_idx >> 2) & 3, (prev_idx >> 4) & 3))) * chunk_size);
         local_pos = div_euclid_v3(pos - parent_pos, vec3<i32>(chunk_size >> 2));
-        var idx = u32(local_pos.x) + (u32(local_pos.y) << 2u) + u32((local_pos.z) << 4u);
-        var mask = chunk.inner.x;
-        var set_bits = u32(0);
         if any(local_pos >= vec3(4) || local_pos < vec3(0)) {return DataResult(0, 0);}
+        var idx = u32(local_pos.x) + (u32(local_pos.y) << 2u) + u32((local_pos.z) << 4u);
         prev_idx = idx;
-        if idx >= 32 {
-            mask = chunk.inner.y;
-            idx = idx-32;
-            set_bits = count_ones(chunk.inner.x) + count_ones((((1u << idx) - 1) & chunk.inner.y));
-        } else {
-            set_bits = count_ones((((1u << idx) - 1) & chunk.inner.x));
-        }
-        if (mask & (u32(1) << idx)) == 0 {
-            break;
-        }
-        if u32(chunk.prefix_in_block_data_array + set_bits) > arrayLength(&block_data) {
+
+        let map_data_idx = get_data_idx_in_chunk(chunk, idx);
+        if u32(map_data_idx) > arrayLength(&block_data) { // Also takes into account if map_data_idx == 4294967295u {break;}
             break; // Out of bounds
         }
-        curr_data = block_data[chunk.prefix_in_block_data_array + set_bits].data;
+        curr_data = block_data[map_data_idx].data;
         let ty = curr_data & 3;
         if ty == 2 { // Block
             return DataResult(curr_data, u32(depth)); // Return texture id
@@ -85,90 +75,108 @@ fn hit(ray: Ray) -> HitRecordResult {
 
     // Intersect ray with root AABB
     var t = hit_box_t(ray, world_min, world_max);
-    if t == -1.0 {
+    if t == INVALID_BOX_HIT {
         return miss;
     }
 
     // Start just inside
-    var posf = at(ray, t + 1e-5);
+    var posf = at(ray, t + 1e-3);
     if all(ray.orig > world_min) && all(ray.orig < world_max) {
         posf = ray.orig;
     }
 
-    // Precompute signs and reciprocals
     let dir = ray.dir;
-    let rcp = 1.0 / dir;
-    let stepf = sign(dir);              // -1, 0, or 1 per axis
+    let rcp = (1.0 / dir);
+    let stepf = sign(dir); // select(vec3(-1.0), vec3(1.0), ray.dir > vec3(0.0))
     let step = vec3<i32>(stepf);        // for index stepping
 
     // Clamp a to multiples of S in the correct direction
-    let eps = 5e-4;
+    let eps = 5e-3;
+
+    // Curr_chunk = curr_chunks[curr_chunks_len-1]
+    var curr_chunks = array<VoxelChunk, 6>();
+    var parent_pos_stack: array<vec3<i32>, 7>;
+    var idx_stack: array<u32, 7>;
+    parent_pos_stack[0] = vec3<i32>(0);
+    var curr_depth = 1u;
+    var curr_chunks_len = 1u;
+    curr_chunks[0] = root;
+
+    var small_tstep_count = 0;
 
     // Main traversal
     // Hard cap to avoid infinite loops in degenerate cases
-    for (var iter = 0; iter < 500; iter = iter + 1) {
-        if any(posf < world_min) || any(posf > world_max) {
-            break;
-        }
-
+    for (var iter = 0; iter < 200; iter = iter + 1) {
         // Query world at current integer voxel position
-        let posi = vec3<i32>(posf);
-        let res = get_data_in_chunk(posi, root, vec3<i32>(0), 1u, cam.root_max_depth);
-
-        // No data anywhere -> miss
-        if res.data == 0u && res.depth == 0u {
-            break;
+        let posi = vec3<i32>(floor(posf));
+        let parent_pos = parent_pos_stack[curr_depth - 1u];
+        let child_size_i = i32(depth_to_chunk_size(curr_depth));
+        let local_pos = div_euclid_v3(posi - parent_pos, vec3(child_size_i));
+        if any((posi - parent_pos)<vec3(0)) || any(local_pos >= vec3(4)) {
+            if curr_depth == 1u { 
+                break;
+             }
+            curr_depth -= 1u;
+            curr_chunks_len -= 1u;
+            continue;
         }
 
-        let ty = res.data & 3u;
+        var chunk_idx = u32(local_pos.x) | (u32(local_pos.y) << 2u) | (u32(local_pos.z) << 4u);
+        let map_data_idx = get_data_idx_in_chunk(curr_chunks[curr_chunks_len - 1u], chunk_idx);
+        if map_data_idx < arrayLength(&block_data) {
+            let curr_data = get_block_data_follow_tails(map_data_idx);
+            if curr_data == 4294967295u {
+                break;
+            }
+            let ty = curr_data & 3u;
 
-        // Hit a solid block -> do precise block AABB hit & return
-        if ty == 2u {
-            return hit_box_gen(
-                ray,
-                Box(vec3<f32>(posi), vec3<f32>(posi) + vec3<f32>(1.0), (u32(res.data >> 2)))
-            ); // res.data>>2
+            if ty == 1u {
+                // descend
+                idx_stack[curr_depth - 1u] = chunk_idx;
+                parent_pos_stack[curr_depth] = parent_pos + vec3<i32>(
+                    local_pos.x * child_size_i,
+                    local_pos.y * child_size_i,
+                    local_pos.z * child_size_i
+                );
+                curr_chunks[curr_chunks_len] = voxel_chunks[curr_data >> 2];
+                curr_chunks_len += 1u;
+                curr_depth += 1u;
+                continue; // IMPORTANT: re-evaluate at new depth
+            } else if ty == 2u {
+                // break;
+                return hit_box_gen(ray, Box(vec3<f32>(posi), vec3<f32>(posi) + vec3(1.0), u32(curr_data>>2))); // making posi = 0 and rb 10000 is fun
+            }
         }
+        if map_data_idx != 4294967295u {
+            return valid_res(vec3(0., 1., 0.));
+        }
+        let S = f32(max(1, child_size_i));               // size of a child cell at current depth
+        let world_pos_in_parent = posf-vec3<f32>(parent_pos);
 
-        // Otherwise we’re inside a (non-empty) chunk cell: step to next boundary
-        // Cell size at this depth (size of a child cell of that chunk)
-        var S = f32(depth_to_chunk_size(res.depth));
-
-        // Handle degenerate directions: if a dir component is zero, never cross that axis
+        // handle zeros
         let inf = 1e30;
+        let normed = world_pos_in_parent / S; 
+        var idxf = div_euclid_f32_v3(world_pos_in_parent, vec3(f32(S)));
+        idxf = floor(normed);
+        // idxf = floor(world_pos_in_parent)*S;
+        let next = select(idxf*S, (idxf+vec3(1.))*S, stepf>vec3(0.));
 
-        // Current indices in this cell grid
-        let idx = floor(posf / S);
+        var tMax = select(vec3(inf), (next - world_pos_in_parent) * rcp, dir != vec3(0.));
 
-        // Next boundary for each axis depending on ray direction
-        // stepf > 0 -> boundary at (idx+1)*S
-        // stepf < 0 -> boundary at idx*S (the lower boundary of current cell)
-        let next_x = select(idx.x * S, (idx.x + 1.0) * S, stepf.x > 0.0);
-        let next_y = select(idx.y * S, (idx.y + 1.0) * S, stepf.y > 0.0);
-        let next_z = select(idx.z * S, (idx.z + 1.0) * S, stepf.z > 0.0);
-
-        // Distances along the ray to those boundaries
-        var tMax = vec3<f32>(
-            select(inf, (next_x - posf.x) * rcp.x, dir.x != 0.0),
-            select(inf, (next_y - posf.y) * rcp.y, dir.y != 0.0),
-            select(inf, (next_z - posf.z) * rcp.z, dir.z != 0.0)
-        );
-
-        // If we were exactly on a boundary, nudge forward to avoid sticking
-        tMax = max(tMax, vec3<f32>(0.0));
-
-        // Choose smallest positive t
         let tStep = min(tMax.x, min(tMax.y, tMax.z));
-        if !(tStep < inf) {
-            break;
-        }
+        if !(tStep < inf) { 
+            return valid_res(vec3(0., 0., 1.));
+         }
 
-        // Advance along ray to the selected boundary
-        posf = posf + dir * (tStep + eps);
+        // nudge with scale-aware epsilon
+        let eps = 1e-3 * max(1.0, S);
+        posf += dir * (tStep + eps);
     }
 
     return miss;
 }
+
+const INVALID_BOX_HIT: f32 = 3*10e30;
 fn hit_box_t(ray: Ray, bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
     let t135 = (bmax - ray.orig) / ray.dir;
     let t246 = (bmin - ray.orig) / ray.dir;
@@ -177,7 +185,7 @@ fn hit_box_t(ray: Ray, bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
     let tmax = min(min(max(t135.x, t246.x), max(t135.y, t246.y)), max(t135.z, t246.z));
 
     if tmin > tmax || tmax < 0 {
-        return -1.0;
+        return INVALID_BOX_HIT;
     }
     return tmin;
 }
@@ -186,7 +194,7 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
     var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
 
     var t = hit_box_t(ray, box.min, box.max);
-    if t == -1.0 {
+    if t == INVALID_BOX_HIT {
         return res; // No hit
     }
     res.valid = true;
@@ -235,6 +243,7 @@ fn ray_color(ray2: Ray) -> vec3<f32> {
     let unit_direction = normalize(ray.dir);
     let a = 0.5 * (unit_direction.y + 1.0);
     var c = (1.0 - a) * vec3(1.0, 1.0, 1.0) + a * vec3(0.5, 0.7, 1.0);
+    // c *= c*c*vec3(0.5, 0., 0.);
 
     for (var i = 1; i < 200; i += 10) {
         var res = hit(ray);
@@ -242,7 +251,7 @@ fn ray_color(ray2: Ray) -> vec3<f32> {
             var direction = res.rec.normal + random_unit_vector() * 0.5;
             // var direction = reflect(ray.dir, res.rec.normal) + random_unit_vector()*0.2;
             if near_zero(direction) {direction = res.rec.normal;}
-            c = c * res.rec.color;//*(1./f32(i));
+            c = res.rec.color;//*(1./f32(i));
 
             ray = Ray(res.rec.p, direction);
             return c;
