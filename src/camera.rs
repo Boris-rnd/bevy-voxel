@@ -283,13 +283,33 @@
 // //     }
 // // }
 
+use bevy::render::extract_resource::ExtractResource;
+
 use super::*;
-#[repr(C)]
-#[derive(ShaderType, Debug, Clone)]
+// #[repr(C)]
+#[derive(ShaderType, Reflect, Debug, Clone, Resource, Default, ExtractResource, Asset)]
 pub struct FragCamera {
     pub center: Vec3,
     pub direction: Vec3,
     pub fov: f32,
     pub root_max_depth: u32,
     pub accumulated_frames: u32,
+    pub img_dims: UVec2,
+}
+
+// #[derive(Resource)]
+// pub struct SharedFragCamera(pub Handle<FragCamera>);
+
+impl FragCamera {
+    pub fn new(center: Vec3, direction: Vec3, fov: f32, root_max_depth: u32, img_dims: UVec2) -> Self {
+        Self {
+            center,
+            direction,
+            fov,
+            root_max_depth,
+            accumulated_frames: 0,
+            img_dims,
+            ..Default::default()
+        }
+    }
 }

@@ -1,24 +1,16 @@
-// The time since startup data is in the globals binding which is part of the mesh_view_bindings import
-// import bevy_pbr::mesh_view_bindings::globals;
-#import bevy_sprite::{mesh2d_vertex_output::VertexOutput, mesh2d_view_bindings::globals}; 
-// #import bevy_pbr::mesh_view_bindings::globals;
+// #import bevy_sprite::{mesh2d_vertex_output::VertexOutput, mesh2d_view_bindings::globals}; 
 
 include! assets/shaders/utils.wgsl
-// #import "shaders/utils.wgsl"::{depth_to_chunk_size, root_chunk_size, count_ones, branchless_dda, at};
 
-@group(2) @binding(1) var<uniform> cam: Camera;
-@group(2) @binding(2) var<storage, read> spheres: array<Sphere>;
-@group(2) @binding(3) var<storage, read> boxes: array<Box>;
-@group(2) @binding(6) var<storage, read> voxels: array<Voxel>;
-@group(2) @binding(7) var<storage, read> voxel_chunks: array<VoxelChunk>;
-@group(2) @binding(8) var<storage, read> block_data: array<MapData>;
-@group(2) @binding(4) var base_color_texture: texture_2d_array<f32>;
-@group(2) @binding(5) var base_color_sampler: sampler;
-// @group(2) @binding(9) var accumulated_img: texture_storage_2d<rgba32float, read>;
-// @group(2) @binding(10) var accumulated_img2: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(0) var<storage, read_write> accumulated_tex: array<u32>;
+@group(0) @binding(1) var<uniform> cam: Camera;
+@group(0) @binding(2) var<storage, read> voxel_chunks: array<VoxelChunk>;
+@group(0) @binding(3) var<storage, read> block_data: array<MapData>;
+// @group(2) @binding(3) var atlas: texture_2d_array<f32>;
+// @group(2) @binding(4) var base_sampler: sampler;
 
 
-@group(2) @binding(100) var<uniform> img_size: vec2<f32>;
+// @group(2) @binding(100) var<uniform> cam.img_size: vec2<f32>;
 
 
 
@@ -233,7 +225,7 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
     if data > 10 {
         res.rec.color = vec3(f32(data) / 255., 0., 0.);
     } else {
-        res.rec.color = textureSample(base_color_texture, base_color_sampler, (uv) + vec2(0.5), data).xyz;
+        // res.rec.color = textureSample(atlas, base_sampler, (uv) + vec2(0.5), data).xyz;
     }
     return res;
 }
@@ -261,8 +253,14 @@ fn ray_color(ray2: Ray) -> vec3<f32> {
     }
     return sqrt(c);
 }
-@fragment
-fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+
+@compute @workgroup_size(1)
+fn main(
+    @builtin(global_invocation_id) global_id: vec3<u32>,
+    @builtin(num_workgroups) grid_size: vec3<u32>,
+) {
+    let i = f32(global_id.x);
+    let j = (1. - f32(global_id.y)/f32(grid_size.y)) * f32(grid_size.y);
     let lookfrom = cam.center;     // Point camera is looking from
     let lookat = cam.center + cam.direction;// Point camera is looking at
     let vup = vec3(0., 1., 0.); // Camera-relative "up" direction
@@ -274,7 +272,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let theta = degrees_to_radians(vfov);
     let h = tan(theta / 2);
     let viewport_height = 2. * h * focal_length;
-    let viewport_width = viewport_height * (img_size.x / img_size.y);
+    let viewport_width = viewport_height * (f32(grid_size.x) / f32(grid_size.y));
 
     let w = normalize(lookfrom - lookat);
     let u = normalize(cross(vup, w));
@@ -284,15 +282,13 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let viewport_v = viewport_height * (v); // Vector down viewport vertical edge
     
     // Calculate the horizontal and vertical delta vectors from pixel to pixel.
-    let pixel_delta_u = viewport_u / img_size.x;
-    let pixel_delta_v = viewport_v / img_size.y;
+    let pixel_delta_u = viewport_u / f32(grid_size.x);
+    let pixel_delta_v = viewport_v / f32(grid_size.y);
 
     // Calculate the location of the upper left pixel.
     let viewport_upper_left = lookfrom - focal_length * w - viewport_u / 2 - viewport_v / 2;
     let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
-    let i = in.uv.x * img_size.x;
-    let j = (1. - in.uv.y) * img_size.y;
 
     let defocus_radius = focal_length * tan(degrees_to_radians(defocus_angle / 2));
     let defocus_disk_u = u * defocus_radius;
@@ -304,7 +300,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     var antialiasing = false;
     if samples_per_pixel > 1 {antialiasing = true;}
     var c = vec3(0.);
-    rng_seed = globals.time + (in.uv.x + in.uv.y * 10.);
+    // rng_seed = globals.time + (in.uv.x + in.uv.y * 10.);
     for (var s = 0; s < samples_per_pixel; s++) {
         var offset = vec3(0.);
         if samples_per_pixel > 1 {
@@ -326,9 +322,21 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
 
     // c = vec3(rand_05_centered());
-    let texcoord = vec2(i32(in.uv.x * img_size.x), i32(in.uv.y * img_size.y));
-    var out = vec4<f32>(c, 1.0);
+    // let texcoord = vec2(i32(global_id.x), i32(global_id.y * grid_size.y));
+    // c = ray.dir;
+    c *= 255.;
+    var out = vec4(vec3<u32>(c), 255u);
+    // out.r = u32(cam.img_size.x/100);
+    // out.g = u32(cam.img_size.y/100);
+    // out.b = u32(u32(cam.accum_frames));
+    // var out = vec4(0, 0, 0, 255u);
+    // var out = vec4(global_id, 255u);
+    out.r = min(out.r, 255u);
+    out.g = min(out.g, 255u);
+    out.b = min(out.b, 255u);
+    out.a = min(out.a, 255u);
+    accumulated_tex[global_id.x+global_id.y*grid_size.x] = (out.r) | ((out.g) << 8u) | ((out.b) << 16u) | ((out.a) << 24u);
     // out = (textureLoad(accumulated_img, texcoord) * f32(cam.accum_frames) + out) / f32(cam.accum_frames + 1);
     // textureStore(accumulated_img2, texcoord, out);
-    return out;
+    // return out;
 }

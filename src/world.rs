@@ -1,10 +1,11 @@
 use std::cell::UnsafeCell;
 
 use bevy::{log, math::ops::rem_euclid, prelude::*, render::render_resource::ShaderType};
+use noise::NoiseFn as _;
 
 #[derive(ShaderType)]
 #[repr(C)]
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Sphere {
     pos: Vec3,
     rad: f32,
@@ -15,7 +16,7 @@ pub fn sphere(pos: Vec3, rad: f32, color: Vec3) -> Sphere {
 }
 #[derive(ShaderType)]
 #[repr(C)]
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Box {
     min: Vec3,
     max: Vec3,
@@ -34,7 +35,7 @@ pub fn new_voxel(pos: Vec3) -> Box {
 
 #[derive(ShaderType)]
 #[repr(C)]
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Voxel {
     pos: Vec3,
     texture_id: u32,
@@ -42,7 +43,7 @@ pub struct Voxel {
 
 #[derive(ShaderType)]
 #[repr(C)]
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct VoxelChunk {
     pub idx_in_parent: u32,
     pub inner: UVec2,
@@ -313,7 +314,7 @@ impl LocalPos {
     }
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Resource, Clone)]
 pub struct GameWorld {
     pub spheres: Vec<Sphere>,
     pub boxes: Vec<Box>,
@@ -566,4 +567,35 @@ impl ToLocalPos for IVec3 {
         );
         LocalPos::new(self.x as u8, self.y as u8, self.z as u8)
     }
+}
+
+pub fn gen_world() -> GameWorld {
+
+    let mut world = GameWorld {
+        block_data: vec![],
+        voxel_chunks: vec![voxel_chunk(0, 0, 0)],
+        ..Default::default()
+    };
+    let perlin = noise::Perlin::new(1);
+    for x in 0..world.root_size() as i32 {
+        for y in 1..3 {
+            for z in 0..world.root_size() as i32 {
+                // if perlin.get([x as f64, y as f64, z as f64])>0.0 {
+                world.set_block(
+                    ivec3(
+                        x,
+                        ((perlin.get([x as f64 / 50., z as f64 / 50.]) * 10.) as i32 + y).abs(),
+                        z,
+                    ),
+                    MapData::Block(((x + y + z) % 15) as u32),
+                );
+            }
+        }
+    }
+
+    info!("World size: {:?}", world.root_size());
+    debug!("{}", &world.voxel_chunks.len());
+    debug!("{}", &world.block_data.len());
+
+    world
 }

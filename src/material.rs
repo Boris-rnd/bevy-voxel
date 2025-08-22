@@ -2,32 +2,30 @@ use super::*;
 
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
 pub struct CustomMaterial {
-    #[storage(2, read_only)]
-    pub spheres: Handle<bevy::render::storage::ShaderStorageBuffer>,
-    #[storage(3, read_only)]
-    pub boxes: Handle<bevy::render::storage::ShaderStorageBuffer>,
-    #[storage(6, read_only)]
-    pub voxels: Handle<bevy::render::storage::ShaderStorageBuffer>,
-    #[storage(7, read_only)]
-    pub voxel_chunks: Handle<bevy::render::storage::ShaderStorageBuffer>,
-    #[storage(8, read_only)]
-    pub block_data: Handle<bevy::render::storage::ShaderStorageBuffer>,
-
-    #[uniform(1)]
+    // #[storage(2, read_only)]
+    // pub spheres: Handle<bevy::render::storage::ShaderStorageBuffer>,
+    // #[storage(3, read_only)]
+    // pub boxes: Handle<bevy::render::storage::ShaderStorageBuffer>,
+    // #[storage(6, read_only)]
+    // pub voxels: Handle<bevy::render::storage::ShaderStorageBuffer>,
+    
+    #[uniform(0)]
     pub camera: FragCamera,
-
-    #[texture(4, dimension = "2d_array")]
-    #[sampler(5)]
+    #[storage(1, read_only)]
+    pub voxel_chunks: Handle<bevy::render::storage::ShaderStorageBuffer>,
+    #[storage(2, read_only)]
+    pub map_data: Handle<bevy::render::storage::ShaderStorageBuffer>,
+    #[texture(3, dimension = "2d_array")]
+    #[sampler(4)]
     pub atlas: Handle<Image>,
 
-    /// Need 2 textures for accumulation, then we swap them as ping-pong
-    #[texture(9, dimension = "2d")]
-    pub accumulated_img: Handle<Image>,
-    #[texture(10, dimension = "2d")]
-    pub accumulated_img2: Handle<Image>,
 
-    #[uniform(100)]
-    pub image_dimensions: Vec2,
+    /// Need 2 textures for accumulation, then we swap them as ping-pong
+    #[texture(5, dimension = "2d")]
+    pub accumulated_img: Handle<Image>,
+    // #[texture(10, dimension = "2d")]
+    // pub accumulated_img2: Handle<Image>,
+
 }
 
 impl Material2d for CustomMaterial {
@@ -43,44 +41,20 @@ impl CustomMaterial {
     pub fn new(
         image_dimensions: Vec2,
         center: Vec3,
-        world: GameWorld,
+        game_world: Res<GameWorld>,
         mut imgs: &mut ResMut<Assets<Image>>,
         mut buffers: &mut ResMut<Assets<bevy::render::storage::ShaderStorageBuffer>>,
     ) -> Self {
         Self {
-            image_dimensions,
-            camera: FragCamera {
-                center,
-                direction: vec3(0., 0., -1.)-center,
-                fov: 90.,
-                root_max_depth: world.root_max_depth(),
-                accumulated_frames: 0,
-            },
+            camera: FragCamera::new(center, vec3(0., 0., -1.)-center, 90., game_world.root_max_depth(), uvec2(image_dimensions.x as _, image_dimensions.y as _)),
             atlas: get_atlas_handle(&mut imgs).unwrap(),
 
-            spheres: buffers.add(ShaderStorageBuffer::from(world.spheres)),
-            boxes: buffers.add(ShaderStorageBuffer::from(world.boxes)),
-            voxels: buffers.add(ShaderStorageBuffer::from(world.voxels)),
-            voxel_chunks: buffers.add(ShaderStorageBuffer::from(world.voxel_chunks)),
-            block_data: buffers.add(ShaderStorageBuffer::from(world.block_data)),
+            // spheres: buffers.add(ShaderStorageBuffer::from(game_world.spheres)),
+            // boxes: buffers.add(ShaderStorageBuffer::from(game_world.boxes)),
+            // voxels: buffers.add(ShaderStorageBuffer::from(game_world.voxels)),
+            voxel_chunks: buffers.add(ShaderStorageBuffer::from(game_world.voxel_chunks.clone())),
+            map_data: buffers.add(ShaderStorageBuffer::from(game_world.block_data.clone())),
             accumulated_img: imgs.add({
-                let mut image = Image::new_fill(
-                    Extent3d {
-                        width: image_dimensions.x as _,
-                        height: image_dimensions.y as _,
-                        depth_or_array_layers: 1,
-                    },
-                    TextureDimension::D2,
-                    &[0; 16],
-                    TextureFormat::Rgba32Float,
-                    RenderAssetUsages::default(),
-                );
-                image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING
-                    | TextureUsages::STORAGE_BINDING
-                    | TextureUsages::RENDER_ATTACHMENT;
-                image
-            }),
-            accumulated_img2: imgs.add({
                 let mut image = Image::new_fill(
                     Extent3d {
                         width: image_dimensions.x as _,
@@ -154,6 +128,24 @@ pub fn get_atlas_handle(mut imgs: &mut ResMut<Assets<Image>>) -> Result<Handle<I
         TextureFormat::Rgba8UnormSrgb,
         RenderAssetUsages::RENDER_WORLD,
     );
+    
     image.reinterpret_stacked_2d_as_array(layers);
     Ok(imgs.add(image))
+}
+
+
+
+
+#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
+pub struct PassthroughMaterial {
+    #[uniform(0)]
+    pub camera: FragCamera,
+    #[storage(1, read_only)]
+    pub accumulated_tex: Handle<ShaderStorageBuffer>,
+}
+
+impl Material2d for PassthroughMaterial {
+    fn fragment_shader() -> ShaderRef {
+        "shaders/passthrough-compiled.wgsl".into()
+    }
 }

@@ -257,6 +257,7 @@ struct Camera {
     fov: f32,
     root_max_depth: u32,
     accum_frames: u32,
+    img_size: vec2<u32>,
 }
 struct Sphere {
     pos: vec3<f32>,

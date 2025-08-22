@@ -11,6 +11,7 @@ def main():
         return
 
     wgsl_file = argv[1]
+    compile_wgsl(wgsl_file)
     
     print(f"Watching {os.path.dirname(wgsl_file)} for changes...")
     event_handler = FileSystemEventHandler()
@@ -27,8 +28,8 @@ def main():
 
 def on_modified(wgsl_file):
     def on_modified_inner(event: FileModifiedEvent):
-        if (event.src_path == wgsl_file.replace('.wgsl', '-compiled.wgsl')) or (not event.src_path.endswith('.wgsl')) or (event.is_directory):return
-        print(event.event_type, event.is_synthetic, event)
+        if (event.src_path.endswith('-compiled.wgsl')) or (not event.src_path.endswith('.wgsl')) or (event.is_directory):return
+        # print(event.event_type, event.is_synthetic, event)
         print(f"File {event.src_path} modified, recompiling..."),
         compile_wgsl(wgsl_file)
     return on_modified_inner

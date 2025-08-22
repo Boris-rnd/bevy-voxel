@@ -1,34 +1,321 @@
-pub fn compute_update(mut compute_worker: ResMut<AppComputeWorker<SimpleComputeWorker>>) {
-    if !compute_worker.ready() {
-        return;
-    };
-    // let result: Vec<f32> = compute_worker.read_vec("values");
-    
-    // compute_worker.write_slice("values", &[2.0f32, 3., 4., 5.]);
-
-    // println!("got {:?}", result)
-}
 use super::*;
+use bevy::{
+    prelude::*,
+    render::{
+        extract_resource::{ExtractResource, ExtractResourcePlugin},
+        gpu_readback::{Readback, ReadbackComplete},
+        render_asset::{RenderAssetUsages, RenderAssets},
+        render_graph::{self, RenderGraph, RenderLabel},
+        render_resource::{
+            binding_types::{
+                storage_buffer, storage_buffer_read_only, texture_storage_2d, uniform_buffer,
+                uniform_buffer_sized,
+            },
+            *,
+        },
+        renderer::{RenderContext, RenderDevice},
+        storage::{GpuShaderStorageBuffer, ShaderStorageBuffer},
+        texture::GpuImage,
+        Render, RenderApp, RenderSet,
+    },
+};
 
-#[derive(TypePath)]
-pub struct SimpleShader;
-
-impl ComputeShader for SimpleShader {
-    fn shader() -> ShaderRef {
-        "shaders/simple.wgsl".into()
-    }
-}
 #[derive(Resource)]
-pub struct SimpleComputeWorker;
+pub struct CameraUniform(UniformBuffer<FragCamera>);
 
-impl ComputeWorker for SimpleComputeWorker {
-    fn build(world: &mut World) -> AppComputeWorker<Self> {
-        let worker = AppComputeWorkerBuilder::new(world)
-            .add_uniform("uni", &5.)
-            .add_staging("accumulated_tex", &[0u32; 800*600])
-            .add_pass::<SimpleShader>([4, 1, 1], &["uni", "accumulated_tex"])
-            .build();
+#[derive(Resource, ExtractResource, Clone)]
+pub struct ReadbackBuffer {
+    pub voxel_chunks: Handle<ShaderStorageBuffer>,
+    pub map_data: Handle<ShaderStorageBuffer>,
+}
 
-        worker
+pub struct GpuReadbackPlugin;
+impl Plugin for GpuReadbackPlugin {
+    fn build(&self, _app: &mut App) {}
+
+    fn finish(&self, app: &mut App) {
+        let render_app = app.sub_app_mut(RenderApp);
+        render_app.init_resource::<ComputePipeline>().add_systems(
+            Render,
+            ((prepare_bind_group)
+                .in_set(RenderSet::PrepareBindGroups)
+                // We don't need to recreate the bind group every frame
+                .run_if(not(resource_exists::<GpuBufferBindGroup>)), resize_cameras.after(prepare_bind_group)),
+        );
+        // Add the compute node as a top level node to the render graph
+        // This means it will only execute once per frame
+        render_app
+            .world_mut()
+            .resource_mut::<RenderGraph>()
+            .add_node(ComputeNodeLabel, ComputeNode::default());
     }
 }
+
+// pub fn queue_compute_pass(
+//     mut world: &mut World,
+//     pipeline: Res<ComputePipeline>,
+//     mut render_pass: ResMut<RenderGraph>,
+//     camera: Res<FragCamera>,
+// ) {
+
+//     let pipeline_cache = world.resource::<PipelineCache>();
+//     let pipeline = world.resource::<ComputePipeline>();
+//     let bind_group = world.resource::<GpuBufferBindGroup>();
+
+//     // dbg!(world.resource::<FragCamera>().img_dims);
+
+//     if let Some(init_pipeline) = pipeline_cache.get_compute_pipeline(pipeline.pipeline) {
+//         let mut pass =
+//             render_context
+//                 .command_encoder()
+//                 .begin_compute_pass(&ComputePassDescriptor {
+//                     label: Some("GPU readback compute pass"),
+//                     ..default()
+//                 });
+
+//         pass.set_bind_group(0, &bind_group.0, &[]);
+//         pass.set_pipeline(init_pipeline);
+//         pass.dispatch_workgroups(
+//             world.resource::<FragCamera>().img_dims.x as _,
+//             world.resource::<FragCamera>().img_dims.y as _,
+//             1,
+//         );
+//     }
+// }
+
+pub fn resize_cameras(
+    mut frag_camera: ResMut<FragCamera>,
+    mut cam_uni: ResMut<CameraUniform>,
+    
+
+    render_device: Res<RenderDevice>,
+    queue: Res<bevy::render::renderer::RenderQueue>,
+) {
+    // dbg!(&frag_camera);
+    cam_uni.0.set(frag_camera.clone());
+    cam_uni.0.write_buffer(&render_device, &queue);
+    // buf.set_data(mat.camera.clone());
+}
+
+fn prepare_bind_group(
+    mut commands: Commands,
+    pipeline: Res<ComputePipeline>,
+    render_device: Res<RenderDevice>,
+    my_buffers: Res<ReadbackBuffer>,
+    image: Res<AccumulatedTexture>,
+    buffers: Res<RenderAssets<GpuShaderStorageBuffer>>,
+    camera: Res<FragCamera>,
+    images: Res<RenderAssets<GpuImage>>,
+    queue: Res<bevy::render::renderer::RenderQueue>,
+) {
+    let mut cam_buf = UniformBuffer::from(camera.clone());
+    cam_buf.write_buffer(&render_device, &queue);
+
+    let bind_group = render_device.create_bind_group(
+        None,
+        &pipeline.layout,
+        &BindGroupEntries::sequential((
+            buffers
+                .get(&image.0)
+                .unwrap()
+                .buffer
+                .as_entire_buffer_binding(),
+            &cam_buf,
+            buffers
+                .get(&my_buffers.voxel_chunks)
+                .unwrap()
+                .buffer
+                .as_entire_buffer_binding(),
+            buffers
+                .get(&my_buffers.map_data)
+                .unwrap()
+                .buffer
+                .as_entire_buffer_binding(),
+        )),
+    );
+    commands.insert_resource(CameraUniform(cam_buf));
+    commands.insert_resource(GpuBufferBindGroup(bind_group));
+}
+
+#[derive(Resource)]
+pub struct GpuBufferBindGroup(pub BindGroup);
+pub fn setup(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
+    window_query: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    game_world: Res<GameWorld>,
+    camera: Res<FragCamera>,
+) {
+    let win_size = window_query.single().unwrap().resolution.size();
+    // Create a storage texture with some data
+    // let size = Extent3d {
+    //     width: win_size.x as _,
+    //     height: win_size.y as _,
+    //     ..default()
+    // };
+    // // We create an uninitialized image since this texture will only be used for getting data out
+    // // of the compute shader, not getting data in, so there's no reason for it to exist on the CPU
+    // let mut image = Image::new_uninit(
+    //     size,
+    //     TextureDimension::D2,
+    //     TextureFormat::R32Uint,
+    //     RenderAssetUsages::RENDER_WORLD,
+    // );
+    // // We also need to enable the COPY_SRC, as well as STORAGE_BINDING so we can use it in the
+    // // compute shader
+    // image.texture_descriptor.usage |= TextureUsages::COPY_SRC | TextureUsages::STORAGE_BINDING;
+
+
+    let mut buf2 = ShaderStorageBuffer::from(game_world.voxel_chunks.clone());
+    buf2.buffer_description.usage |= BufferUsages::UNIFORM;
+
+    let mut buf3 = ShaderStorageBuffer::from(game_world.block_data.clone());
+    buf3.buffer_description.usage |= BufferUsages::UNIFORM;
+
+    commands.insert_resource(ReadbackBuffer {
+        voxel_chunks: buffers.add(buf2),
+        map_data: buffers.add(buf3),
+    });
+    commands.insert_resource(AccumulatedTexture(buffers.add(ShaderStorageBuffer::from(
+        vec![0u32; (1920 * 1080) as usize],
+    ))));
+}
+
+#[derive(Resource)]
+pub struct ComputePipeline {
+    layout: BindGroupLayout,
+    pipeline: CachedComputePipelineId,
+}
+
+impl FromWorld for ComputePipeline {
+    fn from_world(world: &mut World) -> Self {
+        let render_device = world.resource::<RenderDevice>();
+        let layout = render_device.create_bind_group_layout(
+            Some("Bind group layout compute"),
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::COMPUTE,
+                (
+                    storage_buffer::<Vec<u32>>(false),
+                    uniform_buffer::<FragCamera>(false),
+                    storage_buffer_read_only::<Vec<VoxelChunk>>(false),
+                    storage_buffer_read_only::<Vec<MapDataPacked>>(false),
+                ),
+            ),
+        );
+        let shader = world.load_asset("shaders/raytrace-compiled.wgsl");
+        let pipeline_cache = world.resource::<PipelineCache>();
+        let pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
+            label: Some("GPU readback compute shader".into()),
+            layout: vec![layout.clone()],
+            push_constant_ranges: Vec::new(),
+            shader: shader.clone(),
+            shader_defs: Vec::new(),
+            entry_point: "main".into(),
+            zero_initialize_workgroup_memory: false,
+        });
+        ComputePipeline { layout, pipeline }
+    }
+}
+
+/// Label to identify the node in the render graph
+#[derive(Debug, Hash, PartialEq, Eq, Clone, RenderLabel)]
+struct ComputeNodeLabel;
+
+/// The node that will execute the compute shader
+#[derive(Default)]
+struct ComputeNode {}
+impl render_graph::Node for ComputeNode {
+    fn run(
+        &self,
+        _graph: &mut render_graph::RenderGraphContext,
+        render_context: &mut RenderContext,
+        world: &World,
+    ) -> Result<(), render_graph::NodeRunError> {
+        if world.get_resource::<FragCamera>().is_none() {
+            info!("Couldn't get frag camera, skipping compute pass.");
+            return Ok(());
+        }
+        let pipeline_cache = world.resource::<PipelineCache>();
+        let pipeline = world.resource::<ComputePipeline>();
+        let bind_group = world.resource::<GpuBufferBindGroup>();
+
+        // dbg!(world.resource::<FragCamera>().img_dims);
+
+        if let Some(init_pipeline) = pipeline_cache.get_compute_pipeline(pipeline.pipeline) {
+            let mut pass =
+                render_context
+                    .command_encoder()
+                    .begin_compute_pass(&ComputePassDescriptor {
+                        label: Some("GPU readback compute pass"),
+                        ..default()
+                    });
+
+            pass.set_bind_group(0, &bind_group.0, &[]);
+            pass.set_pipeline(init_pipeline);
+            pass.dispatch_workgroups(
+                world.resource::<FragCamera>().img_dims.x as _,
+                world.resource::<FragCamera>().img_dims.y as _,
+                1,
+            );
+        }
+        Ok(())
+    }
+}
+
+// pub fn setup() {
+
+// }
+
+// use bevy::prelude::*;
+// use bevy_app_compute::prelude::*;
+
+// use crate::{FragCamera, GameWorld};
+
+// #[derive(TypePath)]
+// pub struct SimpleShader;
+
+// impl ComputeShader for SimpleShader {
+//     fn shader() -> ShaderRef {
+//         "shaders/raytrace-compiled.wgsl".into()
+//     }
+// }
+
+// #[derive(Resource)]
+// pub struct SimpleComputeWorker;
+
+// impl ComputeWorker for SimpleComputeWorker {
+//     fn build(world: &mut World) -> AppComputeWorker<Self> {
+//         let game_world = world.resource::<GameWorld>().clone();
+//         let frag_cam = world.resource::<FragCamera>().clone();
+//         let worker = AppComputeWorkerBuilder::new(world)
+//             .add_staging("accumulated_tex", &vec![0u32; (frag_cam.img_dims.x*frag_cam.img_dims.y) as _])
+//             .add_uniform("cam", &frag_cam)
+//             .add_storage("voxel_chunks", &game_world.voxel_chunks)
+//             .add_storage("block_data", &game_world.block_data)
+//             .add_pass::<SimpleShader>([frag_cam.img_dims.x as _, frag_cam.img_dims.y as _, 1], &["accumulated_tex", "cam", "voxel_chunks", "block_data"])
+//             .build();
+
+//         worker
+//     }
+// }
+
+// pub fn test(
+//     mut compute_worker: ResMut<AppComputeWorker<SimpleComputeWorker>>
+// ) {
+//     if !compute_worker.ready() {
+//         return;
+//     };
+//     // dbg!(compute_worker.read_vec::<Vec<u32>>("accumulated_tex").len());
+
+//     let mut buf = compute_worker.get_buffer("accumulated_tex").unwrap();
+
+//     bevy::render::storage::ShaderStorageBuffer::from(buf.as_entire_buffer_binding());
+
+//     let result: Vec<u32> = buf.as_entire_buffer_binding();
+//     dbg!(&result[0..100]);
+//     panic!();
+//     // compute_worker.write_slice::<f32>("values", &[2., 3., 4., 5.]);
+
+//     // println!("got {:?}", result)
+// }
