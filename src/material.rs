@@ -75,7 +75,7 @@ impl CustomMaterial {
     }
 }
 
-pub fn get_atlas_handle(mut imgs: &mut ResMut<Assets<Image>>) -> Result<Handle<Image>> {
+pub fn get_raw_atlas() -> Result<(Vec<u8>, UVec3)> {
     let mut imgs_raw = Vec::new();
     let additionnal_paths = vec![
         "assets/textures/block/diamond_block.png",
@@ -116,20 +116,26 @@ pub fn get_atlas_handle(mut imgs: &mut ResMut<Assets<Image>>) -> Result<Handle<I
         image::GenericImage::copy_from(&mut combined, img, 0, i as u32 * height)?;
     }
 
-    let data = combined.into_raw(); // Vec<u8>
+    let data = combined.into_raw(); 
+    Ok((data, uvec3(width,height,layers)))
+}
+
+pub fn get_atlas_handle(mut imgs: &mut ResMut<Assets<Image>>) -> Result<Handle<Image>> {
+    let (data, size) = get_raw_atlas()?;
+
     let mut image = Image::new(
         Extent3d {
-            width,
-            height: height * layers,
+            width: size.x,
+            height: size.y * size.z,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
         data,
-        TextureFormat::Rgba8UnormSrgb,
+        TextureFormat::R32Uint,
         RenderAssetUsages::RENDER_WORLD,
     );
     
-    image.reinterpret_stacked_2d_as_array(layers);
+    image.reinterpret_stacked_2d_as_array(size.z);
     Ok(imgs.add(image))
 }
 
@@ -142,6 +148,8 @@ pub struct PassthroughMaterial {
     pub camera: FragCamera,
     #[storage(1, read_only)]
     pub accumulated_tex: Handle<ShaderStorageBuffer>,
+    // #[storage(2, read_only)]
+    // pub accumulated_tex2: Handle<ShaderStorageBuffer>,
 }
 
 impl Material2d for PassthroughMaterial {

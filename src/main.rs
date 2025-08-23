@@ -49,6 +49,7 @@ fn main() {
         Material2dPlugin::<PassthroughMaterial>::default(),
         ExtractResourcePlugin::<ReadbackBuffer>::default(),
         ExtractResourcePlugin::<AccumulatedTexture>::default(),
+        ExtractResourcePlugin::<ComputeAtlas>::default(),
         ExtractResourcePlugin::<FragCamera>::default(),
         // bevy::render::diagnostic::RenderDiagnosticsPlugin,  
         bevy_app_compute::prelude::AppComputePlugin,
@@ -68,7 +69,7 @@ fn main() {
 static mut WORLD_PTR: OnceCell<GameWorld> = OnceCell::new();
 
 #[derive(Resource, bevy::render::extract_resource::ExtractResource, Clone)]
-pub struct AccumulatedTexture(Handle<ShaderStorageBuffer>);
+pub struct AccumulatedTexture((Handle<ShaderStorageBuffer>, Handle<ShaderStorageBuffer>));
 
 fn _setup(
     mut commands: Commands,
@@ -91,7 +92,8 @@ fn _setup(
         Mesh2d(meshes.add(Rectangle::default())),
         MeshMaterial2d(materials.add(PassthroughMaterial {
             camera: camera.clone(),
-            accumulated_tex: accumulated_tex.0.clone(),
+            accumulated_tex: accumulated_tex.0.0.clone(),
+            // accumulated_tex2: accumulated_tex.0.1.clone(),
         })),
         Transform::default().with_scale(image_dimensions.extend(0.0)),
     ));
@@ -113,7 +115,7 @@ fn update(
     // mut my_buffers: ResMut<ReadbackBuffer>,
     // mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
     // mut buffers: ResMut<RenderAssets<GpuShaderStorageBuffer>>,
-    // mut accumulated_tex: ResMut<ReadbackImage>,
+    mut accumulated_tex: Res<AccumulatedTexture>,
 ) {
     
     // let mut cam = cam.single_mut().unwrap();
@@ -195,10 +197,17 @@ fn update(
         // buffers.get_mut(&mut accumulated_tex.0).unwrap().buffer.destroy();
         // let handle = buffers.add(ShaderStorageBuffer::from(vec![255u32; (new_size.x*new_size.y) as usize]));
         // bind_group.0
-        
-        camera.accumulated_frames = 0;
     }
-    mat.camera = camera.clone();
+    // if camera.accumulated_frames%2==0 {
+    //     mat.accumulated_tex = accumulated_tex.0.0.clone();
+    // } else {
+    //     mat.accumulated_tex = accumulated_tex.0.1.clone();
+    // }
+    mat.camera.accumulated_frames = camera.accumulated_frames;
+    if mat.camera != *camera {
+        camera.accumulated_frames = 0;
+        mat.camera = camera.clone();
+    }
 
     
     // dbg!(&buf.data, buf.buffer_description.size);

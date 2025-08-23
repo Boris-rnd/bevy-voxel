@@ -368,7 +368,7 @@ impl GameWorld {
         4usize.pow(self.root_max_depth())
     }
     pub fn root_max_depth(&self) -> u32 {
-        4
+        5
     }
     fn block_iter_inner(&mut self, pos: IVec3, map_data: Option<MapData>) -> Option<MapData> {
         if pos.x < self.root_size() as i32
@@ -578,6 +578,10 @@ pub fn gen_world() -> GameWorld {
     };
     let perlin = noise::Perlin::new(1);
     for x in 0..world.root_size() as i32 {
+        if x%16==0 {
+            print!("Done {}/{}\r", x, world.root_size());
+            std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        }
         for y in 1..3 {
             for z in 0..world.root_size() as i32 {
                 // if perlin.get([x as f64, y as f64, z as f64])>0.0 {

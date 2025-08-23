@@ -19,7 +19,12 @@ struct Camera {
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = vec2<u32>(in.uv * vec2<f32>(cam.img_size));
     let idx = uv.x + uv.y * cam.img_size.x;
-    let data = accumulated_tex[idx];
+    var data = 0u;
+    // if cam.accum_frames%2==0 { // Inverse from raytrace
+    //     data = accumulated_tex2[idx];
+    // } else {
+    // }
+    data = accumulated_tex[idx];
     // let data = accumulated_tex[u32((in.uv.x)*f32(cam.img_size.x)+in.uv.y*f32(cam.img_size.y)*f32(cam.img_size.x))];
     let r= data&0xffu;
     let g= (data>>8u)&0xffu;

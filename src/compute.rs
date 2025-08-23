@@ -29,6 +29,9 @@ pub struct ReadbackBuffer {
     pub map_data: Handle<ShaderStorageBuffer>,
 }
 
+#[derive(Resource, ExtractResource, Clone)]
+pub struct ComputeAtlas(Handle<Image>);
+
 pub struct GpuReadbackPlugin;
 impl Plugin for GpuReadbackPlugin {
     fn build(&self, _app: &mut App) {}
@@ -102,6 +105,7 @@ fn prepare_bind_group(
     pipeline: Res<ComputePipeline>,
     render_device: Res<RenderDevice>,
     my_buffers: Res<ReadbackBuffer>,
+    atlas: Res<ComputeAtlas>,
     image: Res<AccumulatedTexture>,
     buffers: Res<RenderAssets<GpuShaderStorageBuffer>>,
     camera: Res<FragCamera>,
@@ -116,7 +120,7 @@ fn prepare_bind_group(
         &pipeline.layout,
         &BindGroupEntries::sequential((
             buffers
-                .get(&image.0)
+                .get(&image.0.0)
                 .unwrap()
                 .buffer
                 .as_entire_buffer_binding(),
@@ -128,6 +132,12 @@ fn prepare_bind_group(
                 .as_entire_buffer_binding(),
             buffers
                 .get(&my_buffers.map_data)
+                .unwrap()
+                .buffer
+                .as_entire_buffer_binding(),
+            images.get(&atlas.0).unwrap().texture_view.into_binding(),
+            buffers
+                .get(&image.0.1)
                 .unwrap()
                 .buffer
                 .as_entire_buffer_binding(),
@@ -165,7 +175,22 @@ pub fn setup(
     // // We also need to enable the COPY_SRC, as well as STORAGE_BINDING so we can use it in the
     // // compute shader
     // image.texture_descriptor.usage |= TextureUsages::COPY_SRC | TextureUsages::STORAGE_BINDING;
-
+    let (data, size) = get_raw_atlas().unwrap();
+    let mut image = Image::new(
+        Extent3d {
+            width: size.x,
+            height: size.y * size.z,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.texture_descriptor.usage |= TextureUsages::COPY_SRC | TextureUsages::STORAGE_BINDING;
+    image.reinterpret_stacked_2d_as_array(size.z);
+    
+    commands.insert_resource(ComputeAtlas(images.add(image)));
 
     let mut buf2 = ShaderStorageBuffer::from(game_world.voxel_chunks.clone());
     buf2.buffer_description.usage |= BufferUsages::UNIFORM;
@@ -177,11 +202,12 @@ pub fn setup(
         voxel_chunks: buffers.add(buf2),
         map_data: buffers.add(buf3),
     });
-    commands.insert_resource(AccumulatedTexture(buffers.add(ShaderStorageBuffer::from(
+    commands.insert_resource(AccumulatedTexture((buffers.add(ShaderStorageBuffer::from(
         vec![0u32; (1920 * 1080) as usize],
-    ))));
+    )), buffers.add(ShaderStorageBuffer::from(
+        vec![0u32; (1920 * 1080) as usize],
+    )))));
 }
-
 #[derive(Resource)]
 pub struct ComputePipeline {
     layout: BindGroupLayout,
@@ -200,6 +226,8 @@ impl FromWorld for ComputePipeline {
                     uniform_buffer::<FragCamera>(false),
                     storage_buffer_read_only::<Vec<VoxelChunk>>(false),
                     storage_buffer_read_only::<Vec<MapDataPacked>>(false),
+                    binding_types::texture_storage_2d_array(TextureFormat::Rgba8Unorm, StorageTextureAccess::ReadOnly),
+                    storage_buffer::<Vec<u32>>(false),
                 ),
             ),
         );
@@ -239,8 +267,9 @@ impl render_graph::Node for ComputeNode {
         let pipeline_cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<ComputePipeline>();
         let bind_group = world.resource::<GpuBufferBindGroup>();
+        let camera = world.resource::<FragCamera>();
 
-        // dbg!(world.resource::<FragCamera>().img_dims);
+        // dbg!(world.resource::<FragCamera>());
 
         if let Some(init_pipeline) = pipeline_cache.get_compute_pipeline(pipeline.pipeline) {
             let mut pass =
@@ -254,8 +283,8 @@ impl render_graph::Node for ComputeNode {
             pass.set_bind_group(0, &bind_group.0, &[]);
             pass.set_pipeline(init_pipeline);
             pass.dispatch_workgroups(
-                world.resource::<FragCamera>().img_dims.x as _,
-                world.resource::<FragCamera>().img_dims.y as _,
+                (camera.img_dims.x + 8 - 1) / 8,
+                (camera.img_dims.y + 8 - 1) / 8,
                 1,
             );
         }

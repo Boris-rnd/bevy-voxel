@@ -287,7 +287,7 @@ use bevy::render::extract_resource::ExtractResource;
 
 use super::*;
 // #[repr(C)]
-#[derive(ShaderType, Reflect, Debug, Clone, Resource, Default, ExtractResource, Asset)]
+#[derive(ShaderType, Reflect, Debug, Clone, Resource, Default, ExtractResource, Asset, PartialEq)]
 pub struct FragCamera {
     pub center: Vec3,
     pub direction: Vec3,

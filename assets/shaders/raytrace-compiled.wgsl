@@ -202,6 +202,17 @@ fn root_chunk_size() -> u32 {
     return u32(pow(4.0, f32(cam.root_max_depth)));
 }
 
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let cutoff = vec3<f32>(0.04045);
+    let below = c / 12.92;
+    let above = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
+    return mix(above, below, cutoff);
+}
+
+fn is_accumulating_frames() -> bool {
+    return cam.accum_frames > 1;
+}
+
 /// Returns u32::MAX if not found
 fn get_data_idx_in_chunk(chunk: VoxelChunk, _idx: u32) -> u32 {
     var mask = chunk.inner.x;
@@ -210,13 +221,14 @@ fn get_data_idx_in_chunk(chunk: VoxelChunk, _idx: u32) -> u32 {
     if idx >= 32 {
         mask = chunk.inner.y;
         idx = idx-32;
-        set_bits = count_ones(chunk.inner.x) + count_ones((((1u << idx) - 1) & chunk.inner.y));
+        set_bits = countOneBits(chunk.inner.x) + countOneBits((((1u << idx) - 1) & chunk.inner.y));
     } else {
-        set_bits = count_ones((((1u << idx) - 1) & chunk.inner.x));
+        set_bits = countOneBits((((1u << idx) - 1) & chunk.inner.x));
     }
     if (mask & (u32(1) << idx)) == 0 {
         return 4294967295u;
     }
+    // if (true) {return 0u;}
     return set_bits+chunk.prefix_in_block_data_array;
 }
 /// Returns u32::MAX if not found / invalid idx in tails chain or from start
@@ -324,8 +336,9 @@ struct HitRecordResult {
 @group(0) @binding(1) var<uniform> cam: Camera;
 @group(0) @binding(2) var<storage, read> voxel_chunks: array<VoxelChunk>;
 @group(0) @binding(3) var<storage, read> block_data: array<MapData>;
-// @group(2) @binding(3) var atlas: texture_2d_array<f32>;
-// @group(2) @binding(4) var base_sampler: sampler;
+@group(0) @binding(4) var atlas: texture_storage_2d_array<rgba8unorm, read>;
+// @group(0) @binding(5) var base_sampler: sampler;
+@group(0) @binding(5) var<storage, read_write> accumulated_tex2: array<u32>;
 
 
 // @group(2) @binding(100) var<uniform> cam.img_size: vec2<f32>;
@@ -416,7 +429,11 @@ fn hit(ray: Ray) -> HitRecordResult {
 
     // Main traversal
     // Hard cap to avoid infinite loops in degenerate cases
-    for (var iter = 0; iter < 200; iter = iter + 1) {
+    var max_iter = 500;
+    if is_accumulating_frames() == true {
+        max_iter = 1000;
+    }
+    for (var iter = 0; iter < max_iter; iter = iter + 1) {
         // Query world at current integer voxel position
         let posi = vec3<i32>(floor(posf));
         let parent_pos = parent_pos_stack[curr_depth - 1u];
@@ -460,6 +477,7 @@ fn hit(ray: Ray) -> HitRecordResult {
         if map_data_idx != 4294967295u {
             return valid_res(vec3(0., 1., 0.));
         }
+        // if (true) {continue;}
         let S = f32(max(1, child_size_i));               // size of a child cell at current depth
         let world_pos_in_parent = posf-vec3<f32>(parent_pos);
 
@@ -486,7 +504,7 @@ fn hit(ray: Ray) -> HitRecordResult {
     return miss;
 }
 
-const INVALID_BOX_HIT: f32 = 3*10e30;
+const INVALID_BOX_HIT: f32 = 3*10e10;
 fn hit_box_t(ray: Ray, bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
     let t135 = (bmax - ray.orig) / ray.dir;
     let t246 = (bmin - ray.orig) / ray.dir;
@@ -540,10 +558,13 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
     res.rec.normal = circle_normal;
     res.rec.t = t;
     res.rec.front_face = false;
-    if data > 10 {
-        res.rec.color = vec3(f32(data) / 255., 0., 0.);
+    data = data%7;
+    if data > 5 {
+        res.rec.color = vec3(0., f32(data) / 255., 0.);
     } else {
-        // res.rec.color = textureSample(atlas, base_sampler, (uv) + vec2(0.5), data).xyz;
+        let texcoord = vec2<u32>((uv + vec2(0.5)) * 32.0);
+        let srgb = textureLoad(atlas, texcoord, data).xyz;
+        res.rec.color = srgb_to_linear(srgb);
     }
     return res;
 }
@@ -555,30 +576,29 @@ fn ray_color(ray2: Ray) -> vec3<f32> {
     var c = (1.0 - a) * vec3(1.0, 1.0, 1.0) + a * vec3(0.5, 0.7, 1.0);
     // c *= c*c*vec3(0.5, 0., 0.);
 
-    for (var i = 1; i < 200; i += 10) {
+    for (var i = 1; i < 10; i += 10) {
         var res = hit(ray);
         if res.valid {
-            var direction = res.rec.normal + random_unit_vector() * 0.5;
-            // var direction = reflect(ray.dir, res.rec.normal) + random_unit_vector()*0.2;
+            // if is_accumulating_frames() == false {
+            if true {
+                return res.rec.color;
+            }
+            // var direction = res.rec.normal + random_unit_vector() * 0.5;
+            var direction = reflect(ray.dir, res.rec.normal) + random_unit_vector()*0.2;
             if near_zero(direction) {direction = res.rec.normal;}
-            c = res.rec.color;//*(1./f32(i));
-
+            // c = (c*0.1)+res.rec.color;
             ray = Ray(res.rec.p, direction);
-            return c;
         } else {
             return c;
         }
     }
-    return sqrt(c);
+    return c;
 }
 
-@compute @workgroup_size(1)
-fn main(
-    @builtin(global_invocation_id) global_id: vec3<u32>,
-    @builtin(num_workgroups) grid_size: vec3<u32>,
-) {
+fn compute(global_id: vec2<u32>) {
+    
     let i = f32(global_id.x);
-    let j = (1. - f32(global_id.y)/f32(grid_size.y)) * f32(grid_size.y);
+    let j = (1. - f32(global_id.y)/f32(cam.img_size.y)) * f32(cam.img_size.y);
     let lookfrom = cam.center;     // Point camera is looking from
     let lookat = cam.center + cam.direction;// Point camera is looking at
     let vup = vec3(0., 1., 0.); // Camera-relative "up" direction
@@ -590,7 +610,7 @@ fn main(
     let theta = degrees_to_radians(vfov);
     let h = tan(theta / 2);
     let viewport_height = 2. * h * focal_length;
-    let viewport_width = viewport_height * (f32(grid_size.x) / f32(grid_size.y));
+    let viewport_width = viewport_height * (f32(cam.img_size.x) / f32(cam.img_size.y));
 
     let w = normalize(lookfrom - lookat);
     let u = normalize(cross(vup, w));
@@ -600,8 +620,8 @@ fn main(
     let viewport_v = viewport_height * (v); // Vector down viewport vertical edge
     
     // Calculate the horizontal and vertical delta vectors from pixel to pixel.
-    let pixel_delta_u = viewport_u / f32(grid_size.x);
-    let pixel_delta_v = viewport_v / f32(grid_size.y);
+    let pixel_delta_u = viewport_u / f32(cam.img_size.x);
+    let pixel_delta_v = viewport_v / f32(cam.img_size.y);
 
     // Calculate the location of the upper left pixel.
     let viewport_upper_left = lookfrom - focal_length * w - viewport_u / 2 - viewport_v / 2;
@@ -614,11 +634,14 @@ fn main(
 
     let focus = false;
 
-    let samples_per_pixel = 1;
+    var samples_per_pixel = 1;
+    if is_accumulating_frames() {
+        samples_per_pixel = 2;
+    }
     var antialiasing = false;
     if samples_per_pixel > 1 {antialiasing = true;}
     var c = vec3(0.);
-    // rng_seed = globals.time + (in.uv.x + in.uv.y * 10.);
+    rng_seed = f32((u32(f32(cam.accum_frames)))&(0xFF)) + (f32(global_id.x) + f32(global_id.y) * 10.);
     for (var s = 0; s < samples_per_pixel; s++) {
         var offset = vec3(0.);
         if samples_per_pixel > 1 {
@@ -640,10 +663,10 @@ fn main(
 
 
     // c = vec3(rand_05_centered());
-    // let texcoord = vec2(i32(global_id.x), i32(global_id.y * grid_size.y));
-    // c = ray.dir;
+    // let texcoord = vec2(i32(global_id.x), i32(global_id.y * cam.img_size.y));
+    // c = cam.direction;
     c *= 255.;
-    var out = vec4(vec3<u32>(c), 255u);
+    var out = vec4(vec3<u32>(abs(c)), 255u);
     // out.r = u32(cam.img_size.x/100);
     // out.g = u32(cam.img_size.y/100);
     // out.b = u32(u32(cam.accum_frames));
@@ -653,8 +676,40 @@ fn main(
     out.g = min(out.g, 255u);
     out.b = min(out.b, 255u);
     out.a = min(out.a, 255u);
-    accumulated_tex[global_id.x+global_id.y*grid_size.x] = (out.r) | ((out.g) << 8u) | ((out.b) << 16u) | ((out.a) << 24u);
+    let prev = accumulated_tex[global_id.x+global_id.y*(cam.img_size.x)];
+    let prev_v= vec4(prev&0xffu, (prev>>8u)&0xffu,  (prev>>16u)&0xffu,  (prev>>24u)&0xffu);
+    out = (prev_v*cam.accum_frames + out) / (cam.accum_frames + 1);
+    accumulated_tex[global_id.x+global_id.y*(cam.img_size.x)] = (out.r) | ((out.g) << 8u) | ((out.b) << 16u) | ((out.a) << 24u);
+    // accumulated_tex[global_id.x+global_id.y*(cam.img_size.x)] = cam.accum_frames;
+    if cam.accum_frames%2==0 {
     // out = (textureLoad(accumulated_img, texcoord) * f32(cam.accum_frames) + out) / f32(cam.accum_frames + 1);
-    // textureStore(accumulated_img2, texcoord, out);
-    // return out;
+    } else {
+        // accumulated_tex2[global_id.x+global_id.y*(cam.img_size.x)] = (out.r) | ((out.g) << 8u) | ((out.b) << 16u) | ((out.a) << 24u);
+    }
+}
+// const WORKGROUP_SIZE: u32 = 8;
+// @compute @workgroup_size(WORKGROUP_SIZE, WORKGROUP_SIZE, 1)
+// fn main(
+//     @builtin(global_invocation_id) global_id: vec3<u32>,
+//     @builtin(num_workgroups) workgroup_count: vec3<u32>,
+// ) {
+//     let size_per_invoke = vec2<f32>(cam.img_size)/(vec2(f32(WORKGROUP_SIZE))*vec2<f32>(workgroup_count.xy));
+//     let normed = vec2<f32>(global_id.xy)/(vec2(f32(WORKGROUP_SIZE))*vec2<f32>(workgroup_count.xy));
+    
+//     let local_global_id_start = normed*vec2<f32>(cam.img_size);
+//     let local_global_id_end = local_global_id_start + size_per_invoke;
+//     for (var i = u32(local_global_id_start.x); i < u32(local_global_id_end.x); i += 1) {
+//         for (var j = u32(local_global_id_start.y); j < u32(local_global_id_end.y); j += 1) {
+//             compute(vec2(i, j));
+//         }
+//     }
+// }
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let x = global_id.x;
+    let y = global_id.y;
+    if x >= cam.img_size.x || y >= cam.img_size.y {
+        return;
+    }
+    compute(vec2<u32>(x, y));
 }

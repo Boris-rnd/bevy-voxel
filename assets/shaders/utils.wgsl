@@ -200,6 +200,17 @@ fn root_chunk_size() -> u32 {
     return u32(pow(4.0, f32(cam.root_max_depth)));
 }
 
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let cutoff = vec3<f32>(0.04045);
+    let below = c / 12.92;
+    let above = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
+    return mix(above, below, cutoff);
+}
+
+fn is_accumulating_frames() -> bool {
+    return cam.accum_frames > 1;
+}
+
 /// Returns u32::MAX if not found
 fn get_data_idx_in_chunk(chunk: VoxelChunk, _idx: u32) -> u32 {
     var mask = chunk.inner.x;
@@ -208,13 +219,14 @@ fn get_data_idx_in_chunk(chunk: VoxelChunk, _idx: u32) -> u32 {
     if idx >= 32 {
         mask = chunk.inner.y;
         idx = idx-32;
-        set_bits = count_ones(chunk.inner.x) + count_ones((((1u << idx) - 1) & chunk.inner.y));
+        set_bits = countOneBits(chunk.inner.x) + countOneBits((((1u << idx) - 1) & chunk.inner.y));
     } else {
-        set_bits = count_ones((((1u << idx) - 1) & chunk.inner.x));
+        set_bits = countOneBits((((1u << idx) - 1) & chunk.inner.x));
     }
     if (mask & (u32(1) << idx)) == 0 {
         return 4294967295u;
     }
+    // if (true) {return 0u;}
     return set_bits+chunk.prefix_in_block_data_array;
 }
 /// Returns u32::MAX if not found / invalid idx in tails chain or from start
