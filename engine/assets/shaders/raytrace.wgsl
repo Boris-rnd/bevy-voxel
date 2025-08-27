@@ -1,19 +1,31 @@
 // #import bevy_sprite::{mesh2d_vertex_output::VertexOutput, mesh2d_view_bindings::globals}; 
 
-include! assets/shaders/utils.wgsl
 
 @group(0) @binding(0) var<storage, read_write> accumulated_tex: array<u32>;
 @group(0) @binding(1) var<uniform> cam: Camera;
-@group(0) @binding(2) var<storage, read> voxel_chunks: array<VoxelChunk>;
-@group(0) @binding(3) var<storage, read> block_data: array<MapData>;
-@group(0) @binding(4) var atlas: texture_storage_2d_array<rgba8unorm, read>;
+@group(0) @binding(2) var<storage, read_write> accumulated_tex2: array<u32>;
+@group(0) @binding(3) var atlas: texture_storage_2d_array<rgba8unorm, read>;
+@group(0) @binding(4) var<storage, read> voxel_chunks: array<VoxelChunk>;
+@group(0) @binding(5) var<storage, read> block_data0: array<MapData>;
+@group(0) @binding(6) var<storage, read> block_data1: array<MapData>;
+@group(0) @binding(7) var<storage, read> block_data2: array<MapData>;
+@group(0) @binding(8) var<storage, read> block_data3: array<MapData>;
+
 // @group(0) @binding(5) var base_sampler: sampler;
-@group(0) @binding(5) var<storage, read_write> accumulated_tex2: array<u32>;
+include! utils.wgsl
 
 
 // @group(2) @binding(100) var<uniform> cam.img_size: vec2<f32>;
 
 
+// #ifdef _CHUNK_SIZE
+//     const CHUNK_SIZE: u32 = _CHUNK_SIZE;
+// #endif
+const CHUNK_U32_COUNT = CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE/32;
+// const CHUNK_U32_COUNT = 1;
+const CHUNK_SIZE: u32 = #{_CHUNK_SIZE};
+const CHUNK_MASK = CHUNK_SIZE - 1u;
+const CHUNK_SHIFT = countOneBits(CHUNK_MASK);
 
 struct DataResult {
     data: u32,
@@ -22,43 +34,43 @@ struct DataResult {
 /// Returns root chunk data if not found
 /// max depth starts at 1
 /// Returns block_data, so also has the ty in first 2 bits
-fn get_data_in_chunk(pos: vec3<i32>, chk: VoxelChunk, par_pos: vec3<i32>, dep: u32, max_depth: u32) -> DataResult {
-    // if pos.x==1 {return u32(1);}
-    // else {return u32(4294967295);} 
-    var chunk = chk;
-    var local_pos = vec3<i32>(0);
-    var parent_pos = par_pos;
-    var end_depth = dep;
-    var curr_data = 1u; // Root chunk
-    var prev_idx = 0u;
-    for (var depth = dep; depth <= max_depth; depth++) {
-        end_depth = depth;
-        let chunk_size = i32(depth_to_chunk_size(depth-1));
-        parent_pos += ((vec3<i32>(vec3(prev_idx & 3, (prev_idx >> 2) & 3, (prev_idx >> 4) & 3))) * chunk_size);
-        local_pos = div_euclid_v3(pos - parent_pos, vec3<i32>(chunk_size >> 2));
-        if any(local_pos >= vec3(4) || local_pos < vec3(0)) {return DataResult(0, 0);}
-        var idx = u32(local_pos.x) + (u32(local_pos.y) << 2u) + u32((local_pos.z) << 4u);
-        prev_idx = idx;
+// fn get_data_in_chunk(pos: vec3<i32>, chk: VoxelChunk, par_pos: vec3<i32>, dep: u32, max_depth: u32) -> DataResult {
+//     // if pos.x==1 {return u32(1);}
+//     // else {return u32(4294967295);} 
+//     var chunk = chk;
+//     var local_pos = vec3<i32>(0);
+//     var parent_pos = par_pos;
+//     var end_depth = dep;
+//     var curr_data = 1u; // Root chunk
+//     var prev_idx = 0u;
+//     for (var depth = dep; depth <= max_depth; depth++) {
+//         end_depth = depth;
+//         let chunk_size = i32(depth_to_chunk_size(depth-1));
+//         parent_pos += ((vec3<i32>(vec3(prev_idx & 3, (prev_idx >> 2) & 3, (prev_idx >> 4) & 3))) * chunk_size);
+//         local_pos = div_euclid_v3(pos - parent_pos, vec3<i32>(chunk_size >> 2));
+//         if any(local_pos >= vec3(4) || local_pos < vec3(0)) {return DataResult(0, 0);}
+//         var idx = u32(local_pos.x) + (u32(local_pos.y) << CHUNK_SHIFT) + u32((local_pos.z) << (CHUNK_SHIFT*2));
+//         prev_idx = idx;
 
-        let map_data_idx = get_data_idx_in_chunk(chunk, idx);
-        if u32(map_data_idx) > arrayLength(&block_data) { // Also takes into account if map_data_idx == 4294967295u {break;}
-            break; // Out of bounds
-        }
-        curr_data = block_data[map_data_idx].data;
-        let ty = curr_data & 3;
-        if ty == 2 { // Block
-            return DataResult(curr_data, u32(depth)); // Return texture id
-        } else if ty == 1 { // Chunk
-            // return set_bits; // Return texture id
-            chunk = voxel_chunks[curr_data >> 2];
-        } else { // Error
-            // return u32(4294967295); // u32::MAX
-            break;
-        }
-    }
-    // Returns root chunk if nothing found or latest chunk
-    return DataResult(curr_data, u32(end_depth));
-}
+//         let map_data_idx = get_data_idx_in_chunk(chunk, idx);
+//         if u32(map_data_idx) > arrayLength(&block_data) { // Also takes into account if map_data_idx == 4294967295u {break;}
+//             break; // Out of bounds
+//         }
+//         curr_data = block_data[map_data_idx].data;
+//         let ty = curr_data & 3;
+//         if ty == 2 { // Block
+//             return DataResult(curr_data, u32(depth)); // Return texture id
+//         } else if ty == 1 { // Chunk
+//             // return set_bits; // Return texture id
+//             chunk = voxel_chunks[curr_data >> 2];
+//         } else { // Error
+//             // return u32(4294967295); // u32::MAX
+//             break;
+//         }
+//     }
+//     // Returns root chunk if nothing found or latest chunk
+//     return DataResult(curr_data, u32(end_depth));
+// }
 fn hit(ray: Ray) -> HitRecordResult {
     var miss = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
 
@@ -105,11 +117,11 @@ fn hit(ray: Ray) -> HitRecordResult {
     }
     for (var iter = 0; iter < max_iter; iter = iter + 1) {
         // Query world at current integer voxel position
-        let posi = vec3<i32>(floor(posf));
+        let posi = vec3<i32>(posf);
         let parent_pos = parent_pos_stack[curr_depth - 1u];
         let child_size_i = i32(depth_to_chunk_size(curr_depth));
         let local_pos = div_euclid_v3(posi - parent_pos, vec3(child_size_i));
-        if any((posi - parent_pos)<vec3(0)) || any(local_pos >= vec3(4)) {
+        if any((posi - parent_pos)<vec3(0)) || any(local_pos >= vec3(i32(CHUNK_SIZE))) {
             if curr_depth == 1u { 
                 break;
              }
@@ -118,9 +130,9 @@ fn hit(ray: Ray) -> HitRecordResult {
             continue;
         }
 
-        var chunk_idx = u32(local_pos.x) | (u32(local_pos.y) << 2u) | (u32(local_pos.z) << 4u);
+        var chunk_idx = u32(local_pos.x) | (u32(local_pos.y) << CHUNK_SHIFT) | (u32(local_pos.z) << (CHUNK_SHIFT*2));
         let map_data_idx = get_data_idx_in_chunk(curr_chunks[curr_chunks_len - 1u], chunk_idx);
-        if map_data_idx < arrayLength(&block_data) {
+        if map_data_idx.array_idx < arrayLengthBlockData(map_data_idx.array_array_idx) {
             let curr_data = get_block_data_follow_tails(map_data_idx);
             if curr_data == 4294967295u {
                 break;
@@ -144,8 +156,8 @@ fn hit(ray: Ray) -> HitRecordResult {
                 return hit_box_gen(ray, Box(vec3<f32>(posi), vec3<f32>(posi) + vec3(1.0), u32(curr_data>>2))); // making posi = 0 and rb 10000 is fun
             }
         }
-        if map_data_idx != 4294967295u {
-            return valid_res(vec3(0., 1., 0.));
+        if map_data_idx.array_array_idx != 4294967295u {
+            return valid_res(vec3(0., 1., 1.));
         }
         // if (true) {continue;}
         let S = f32(max(1, child_size_i));               // size of a child cell at current depth
@@ -158,12 +170,10 @@ fn hit(ray: Ray) -> HitRecordResult {
         idxf = floor(normed);
         // idxf = floor(world_pos_in_parent)*S;
         let next = select(idxf*S, (idxf+vec3(1.))*S, stepf>vec3(0.));
-
         var tMax = select(vec3(inf), (next - world_pos_in_parent) * rcp, dir != vec3(0.));
-
         let tStep = min(tMax.x, min(tMax.y, tMax.z));
         if !(tStep < inf) { 
-            return valid_res(vec3(0., 0., 1.));
+            return valid_res(vec3(1., 0., 1.));
          }
 
         // nudge with scale-aware epsilon
@@ -228,9 +238,9 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
     res.rec.normal = circle_normal;
     res.rec.t = t;
     res.rec.front_face = false;
-    data = data%7;
+    // data = data%7;
     if data > 5 {
-        res.rec.color = vec3(0., f32(data) / 255., 0.);
+        res.rec.color = vec3(0., f32(data) / 255., f32(data) / 255.);
     } else {
         let texcoord = vec2<u32>((uv + vec2(0.5)) * 32.0);
         let srgb = textureLoad(atlas, texcoord, data).xyz;

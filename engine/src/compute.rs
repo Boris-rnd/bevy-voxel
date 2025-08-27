@@ -25,8 +25,7 @@ pub struct CameraUniform(UniformBuffer<FragCamera>);
 
 #[derive(Resource, ExtractResource, Clone)]
 pub struct ReadbackBuffer {
-    pub voxel_chunks: Handle<ShaderStorageBuffer>,
-    pub map_data: Handle<ShaderStorageBuffer>,
+    pub buffers: Vec<Handle<ShaderStorageBuffer>>,
 }
 
 #[derive(Resource, ExtractResource, Clone)]
@@ -115,33 +114,32 @@ fn prepare_bind_group(
     let mut cam_buf = UniformBuffer::from(camera.clone());
     cam_buf.write_buffer(&render_device, &queue);
 
+    let mut entries: Vec<(usize, BindingResource<'_>)>  = vec![
+        (0, buffers
+            .get(&image.0.0)
+            .unwrap()
+            .buffer
+            .as_entire_binding()),
+        (1, cam_buf.binding().unwrap()),
+        (2, buffers
+            .get(&image.0.1)
+            .unwrap()
+            .buffer
+            .as_entire_binding()),
+        (3, images.get(&atlas.0).unwrap().texture_view.into_binding()),
+    ];
+
+    for (i, b) in my_buffers.buffers.iter().enumerate() {
+        entries.push((4 + i, buffers.get(b).unwrap().buffer.as_entire_binding()));
+    }
+
     let bind_group = render_device.create_bind_group(
         None,
         &pipeline.layout,
-        &BindGroupEntries::sequential((
-            buffers
-                .get(&image.0.0)
-                .unwrap()
-                .buffer
-                .as_entire_buffer_binding(),
-            &cam_buf,
-            buffers
-                .get(&my_buffers.voxel_chunks)
-                .unwrap()
-                .buffer
-                .as_entire_buffer_binding(),
-            buffers
-                .get(&my_buffers.map_data)
-                .unwrap()
-                .buffer
-                .as_entire_buffer_binding(),
-            images.get(&atlas.0).unwrap().texture_view.into_binding(),
-            buffers
-                .get(&image.0.1)
-                .unwrap()
-                .buffer
-                .as_entire_buffer_binding(),
-        )),
+        &entries.iter().map(|(i, binding)| BindGroupEntry {
+            binding: *i as u32,
+            resource: binding.clone(),
+        }).collect::<Vec<_>>(),
     );
     commands.insert_resource(CameraUniform(cam_buf));
     commands.insert_resource(GpuBufferBindGroup(bind_group));
@@ -192,16 +190,12 @@ pub fn setup(
     
     commands.insert_resource(ComputeAtlas(images.add(image)));
 
-    let mut buf2 = ShaderStorageBuffer::from(game_world.voxel_chunks.clone());
-    buf2.buffer_description.usage |= BufferUsages::UNIFORM;
-
-    let mut buf3 = ShaderStorageBuffer::from(game_world.block_data.clone());
-    buf3.buffer_description.usage |= BufferUsages::UNIFORM;
-
-    commands.insert_resource(ReadbackBuffer {
-        voxel_chunks: buffers.add(buf2),
-        map_data: buffers.add(buf3),
-    });
+    let mut my_buffers = Vec::with_capacity(8);
+    my_buffers.push(buffers.add(ShaderStorageBuffer::from(game_world.voxel_chunks.clone())));
+    for v in game_world.block_data.iter() {
+        my_buffers.push(buffers.add(ShaderStorageBuffer::from(v.clone())));
+    }
+    commands.insert_resource(ReadbackBuffer { buffers: my_buffers });
     commands.insert_resource(AccumulatedTexture((buffers.add(ShaderStorageBuffer::from(
         vec![0u32; (1920 * 1080) as usize],
     )), buffers.add(ShaderStorageBuffer::from(
@@ -224,10 +218,13 @@ impl FromWorld for ComputePipeline {
                 (
                     storage_buffer::<Vec<u32>>(false),
                     uniform_buffer::<FragCamera>(false),
+                    storage_buffer::<Vec<u32>>(false),
+                    binding_types::texture_storage_2d_array(TextureFormat::Rgba8Unorm, StorageTextureAccess::ReadOnly),
                     storage_buffer_read_only::<Vec<VoxelChunk>>(false),
                     storage_buffer_read_only::<Vec<MapDataPacked>>(false),
-                    binding_types::texture_storage_2d_array(TextureFormat::Rgba8Unorm, StorageTextureAccess::ReadOnly),
-                    storage_buffer::<Vec<u32>>(false),
+                    storage_buffer_read_only::<Vec<MapDataPacked>>(false),
+                    storage_buffer_read_only::<Vec<MapDataPacked>>(false),
+                    storage_buffer_read_only::<Vec<MapDataPacked>>(false),
                 ),
             ),
         );
@@ -238,7 +235,7 @@ impl FromWorld for ComputePipeline {
             layout: vec![layout.clone()],
             push_constant_ranges: Vec::new(),
             shader: shader.clone(),
-            shader_defs: Vec::new(),
+            shader_defs: vec![ShaderDefVal::UInt("_CHUNK_SIZE".to_string(), CHUNK_SIZE as u32)],
             entry_point: "main".into(),
             zero_initialize_workgroup_memory: false,
         });

@@ -1,3 +1,5 @@
+// #![feature(generic_arg_infer)]
+#![feature(vec_push_within_capacity)]
 #![allow(unused, dead_code)]
 // Temporary code to allow static mutable references
 #![allow(static_mut_refs)]
@@ -21,12 +23,10 @@ pub use bevy::{
     },
     sprite::{AlphaMode2d, Material2d, Material2dPlugin},
 };
-pub use noise::{NoiseFn, Perlin};
 
 pub mod build;
 pub mod camera;
 pub use camera::*;
-pub mod world;
 pub use world::*;
 pub mod compute;
 pub use compute::*;
@@ -45,7 +45,7 @@ fn main() {
             watch_for_changes_override: Some(true),
             ..Default::default()
         }),
-        Material2dPlugin::<CustomMaterial>::default(),
+        // Material2dPlugin::<CustomMaterial>::default(),
         Material2dPlugin::<PassthroughMaterial>::default(),
         ExtractResourcePlugin::<ReadbackBuffer>::default(),
         ExtractResourcePlugin::<AccumulatedTexture>::default(),

@@ -12,11 +12,13 @@ def main():
 
     wgsl_file = argv[1]
     compile_wgsl(wgsl_file)
-    
-    print(f"Watching {os.path.dirname(wgsl_file)} for changes...")
+    dirname = os.path.dirname(wgsl_file)
+    if dirname.strip() == '':
+        dirname = '.'
+    print(f"Watching {dirname} for changes...")
     event_handler = FileSystemEventHandler()
     observer = Observer()
-    observer.schedule(event_handler, os.path.dirname(wgsl_file), recursive=True)
+    observer.schedule(event_handler, dirname, recursive=True)
     observer.start()
     event_handler.on_modified = on_modified(wgsl_file)
     try:

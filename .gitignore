@@ -1,3 +1,5 @@
-target
-assets/*.zip
-assets/textures
+**/target
+**/assets/*.zip
+**/assets/textures
+**/assets/images
+**/*.svg

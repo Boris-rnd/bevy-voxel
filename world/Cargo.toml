@@ -1,0 +1,17 @@
+[package]
+name = "world"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+noise = { version = "0.9.0", features = ["std"] }
+bevy = { workspace = true}
+log = {workspace = true}
+# image = "0.25.6"
+rand = {workspace = true}
+divan = "0.1.21"
+
+
+[[bench]]
+name = "main"
+harness = false

@@ -191,13 +191,17 @@ fn branchless_dda(sideDist: vec3<f32>, pos: vec3<i32>, deltaDist: vec3<f32>, ray
     return res;
 }
 
+fn chunk_depth_to_size(depth: u32) -> u32 {
+    return u32(pow(f32(CHUNK_SIZE), f32(depth)));
+}
+
 fn depth_to_chunk_size(depth: u32) -> u32 {
     // Convert depth to chunk size (16, 8, 4, 2, 1)
-    return root_chunk_size() / u32(pow(4.0, f32(depth)));
+    return root_chunk_size() / chunk_depth_to_size(depth);
 }
 
 fn root_chunk_size() -> u32 {
-    return u32(pow(4.0, f32(cam.root_max_depth)));
+    return chunk_depth_to_size(cam.root_max_depth);
 }
 
 fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
@@ -211,31 +215,86 @@ fn is_accumulating_frames() -> bool {
     return cam.accum_frames > 1;
 }
 
-/// Returns u32::MAX if not found
-fn get_data_idx_in_chunk(chunk: VoxelChunk, _idx: u32) -> u32 {
-    var mask = chunk.inner.x;
-    var set_bits = u32(0);
-    var idx = _idx;
-    if idx >= 32 {
-        mask = chunk.inner.y;
-        idx = idx-32;
-        set_bits = countOneBits(chunk.inner.x) + countOneBits((((1u << idx) - 1) & chunk.inner.y));
+struct MapDataID {
+    array_array_idx: u32,
+    array_idx: u32,
+}
+
+fn size_to_array_array_idx(size: u32) -> u32 {
+    if size < 8 {
+        return 0u;
+    } else if size < 24 {
+        return 1u;
+    } else if size < 40 {
+        return 2u;
     } else {
-        set_bits = countOneBits((((1u << idx) - 1) & chunk.inner.x));
+        return 3u;
     }
-    if (mask & (u32(1) << idx)) == 0 {
-        return 4294967295u;
+}
+fn array_array_idx_to_prefix_size(array_array_idx: u32) -> u32 {
+    if array_array_idx == 0u {
+        return 0u;
+    } else if array_array_idx == 1u {
+        return 8u;
+    } else if array_array_idx == 2u {
+        return 24u;
+    } else {
+        return 40u;
     }
-    // if (true) {return 0u;}
-    return set_bits+chunk.prefix_in_block_data_array;
+}
+fn get_block_data(idx: MapDataID) -> MapData {
+    if idx.array_array_idx == 0u {
+        return block_data0[idx.array_idx];
+    } else if idx.array_array_idx == 1u {
+        return block_data1[idx.array_idx];
+    } else if idx.array_array_idx == 2u {
+        return block_data2[idx.array_idx];
+    } else {
+        return block_data3[idx.array_idx];
+    }
+    
+}
+fn arrayLengthBlockData(idx: u32) -> u32 {
+    if idx == 0u {
+        return arrayLength(&block_data0);
+    } else if idx == 1u {
+        return arrayLength(&block_data1);
+    } else if idx == 2u {
+        return arrayLength(&block_data2);
+    } else {
+        return arrayLength(&block_data3);
+    }
+}
+
+
+/// Returns u32::MAX if not found
+fn get_data_idx_in_chunk(chunk: VoxelChunk, _idx: u32) -> MapDataID {
+    let local_idx = _idx/32u;
+    let local_bit = _idx%32u;
+    if (chunk.inner[local_idx] & (u32(1) << local_bit)) == 0u {
+        return MapDataID(4294967295u, 4294967295u);
+    }
+
+    var ones = 0u;
+    var i = 0u;
+    while i < local_idx {
+        ones += countOneBits(chunk.inner[i]);
+        i += 1u;
+    }
+    
+    let curr_set_bits = countOneBits(((1u << local_bit) - 1u) & chunk.inner[local_idx]);
+    let chunk_idx = curr_set_bits + ones;
+    let curr_array = size_to_array_array_idx(chunk_idx);
+    let local_array_idx = chunk_idx - array_array_idx_to_prefix_size(curr_array);
+    return MapDataID(curr_array, chunk.prefix_in_block_data_array[curr_array] + local_array_idx);
 }
 /// Returns u32::MAX if not found / invalid idx in tails chain or from start
 /// Returns block data, not idx !
-fn get_block_data_follow_tails(idx: u32) -> u32 {
-    var curr_idx = u32(idx);
+fn get_block_data_follow_tails(idx: MapDataID) -> u32 {
+    var curr_idx = idx.array_idx;
     for (var i=0;i<100;i++) {
-        if (curr_idx >= arrayLength(&block_data)) {break;}
-        let curr_data = block_data[curr_idx].data;
+        if (curr_idx >= arrayLengthBlockData(idx.array_array_idx)) {break;}
+        let curr_data = get_block_data(MapDataID(idx.array_array_idx, curr_idx)).data;
         if (curr_data&3u) == 3u { // Tail
             curr_idx = u32(curr_data >> 2);
         } else {
@@ -282,8 +341,8 @@ struct Ray {
 }
 struct VoxelChunk {
     idx_in_parent: u32,
-    inner: vec2<u32>,
-    prefix_in_block_data_array: u32,
+    inner: array<u32, CHUNK_U32_COUNT>,
+    prefix_in_block_data_array: array<u32, 4>,
 }
 struct Voxel {
     pos: vec3<f32>,
@@ -319,10 +378,10 @@ fn local_pos(chunk: VoxelChunk) -> u32 {
     // Returns the local position of the chunk in the world
     return chunk.idx_in_parent;
 }
-fn ivec3_local_pos(chunk: VoxelChunk) -> vec3<i32> {
-    // Returns the local position of the chunk in the world as an ivec3
-    return vec3<i32>(vec3(chunk.idx_in_parent % 4, (chunk.idx_in_parent / 4) % 4, (chunk.idx_in_parent / 16) % 4));
-}
+// fn ivec3_local_pos(chunk: VoxelChunk) -> vec3<i32> {
+//     // Returns the local position of the chunk in the world as an ivec3
+//     return vec3<i32>(vec3(chunk.idx_in_parent % 4, (chunk.idx_in_parent / 4) % 4, (chunk.idx_in_parent / 16) % 4));
+// }
 
 // No tuples
 struct HitRecordResult {
