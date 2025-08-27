@@ -453,10 +453,8 @@ pub const WORLD_SIZE_TO_LEN: &[(usize, usize)] = &[
 ];
 pub const WORLD_SIZE_TO_LEN_DEFAULT: (usize, usize) = WORLD_SIZE_TO_LEN[0];
 
-
-pub fn gen_world() -> GameWorld {
-    let mut start = Instant::now();
-    let mut world = GameWorld::new(4096, 8);
+pub fn gen_world_size(size: u64) -> GameWorld {
+    let mut world = GameWorld::new(size, 8);
     let perlin = noise::Perlin::new(1);
     for x in 0..world.root_size() as i32 {
         if x%16==0 {
@@ -477,10 +475,17 @@ pub fn gen_world() -> GameWorld {
             }
         }
     }
+    world
+}
 
-    log::trace!("Realloc count: {} \t Realloc count chunks: {}\n Mem usage: {} MB", &world.realloc_count, &world.realloc_count_chunks, world.block_data.len()*std::mem::size_of::<MapData>()/1024/1024);
-    log::trace!("Took {:?} to run", start.elapsed());
-    log::trace!("-----\n");
+
+pub fn gen_world() -> GameWorld {
+    let mut start = Instant::now();
+    let world = gen_world_size(4096);
+
+    println!("Realloc count: {} \t Realloc count chunks: {}\n Mem usage: {} MB", &world.realloc_count, &world.realloc_count_chunks, world.block_data.len()*std::mem::size_of::<MapData>()/1024/1024);
+    println!("Took {:?} to run", start.elapsed());
+    println!("-----\n");
     world
 }
 // Tests ran with 1024 world size:

@@ -1,29 +1,44 @@
 // Only for flamegraphs & testing
 
+use bevy::platform::collections::HashMap;
 use world::*;
 
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 fn main() {
-    world_size(1024);
-    world_size(2048);
-    world_size(4096);
-}
+    #[cfg(feature = "dhat-heap")]
+    let _profiler = dhat::Profiler::new_heap();
+    // let mut start = std::time::Instant::now();
+    let prev_world = gen_world_size(1024);
 
-fn world_size(n: u64) {
-    let mut world = GameWorld::new(1024, 8);
-    let mut placed = bevy::platform::collections::HashMap::new();
-    for i in 0..n*10 {
-        if i%1000==0{dbg!(i);}
-        let coords = ivec3(
-            ((rand::random::<f32>().abs() * 100.) as i32)%1000,
-            ((rand::random::<f32>().abs() * 20.) as i32)%1000,
-            ((rand::random::<f32>().abs() * 100.) as i32)%1000,
-        );
-        let blk = MapData::Block(rand::random::<u32>() % 15);
-        world.set_block(coords, blk);
-        placed.insert(coords, blk);
+    // println!("Realloc count: {} \t Realloc count chunks: {}\n Mem usage: {} MB", &prev_world.realloc_count, &prev_world.realloc_count_chunks, prev_world.block_data.len()*std::mem::size_of::<MapData>()/1024/1024);
+    // println!("Took {:?} to run", start.elapsed());
+    // println!("-----\n");
+    
+    let mut start = std::time::Instant::now();
+    let mut world: HashMap<IVec3, MapData> = HashMap::default();
+    let perlin = noise::Perlin::new(1);
+    for x in 0..prev_world.root_size() as i32 {
+        if x%16==0 {
+            print!("Done {}/{}\r", x, prev_world.root_size());
+            std::io::Write::flush(&mut std::io::stdout()).unwrap();
+        }
+        for y in 1..3 {
+            for z in 0..prev_world.root_size() as i32 {
+                // if perlin.get([x as f64, y as f64, z as f64])>0.0 {
+                world.insert(
+                    ivec3(
+                        x,
+                        ((perlin.get([x as f64 / 50., z as f64 / 50.]) * 10.) as i32 + y).abs(),
+                        z,
+                    ),
+                    MapData::Block(((x + y + z) % 15) as u32),
+                );
+            }
+        }
     }
-    for (k, v) in placed.iter() {
-        assert_eq!(world.get_block(*k), Some(*v));
-    }
-
+    println!("Took {:?} to run", start.elapsed());
+    println!("-----\n");
 }

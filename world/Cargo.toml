@@ -10,6 +10,12 @@ log = {workspace = true}
 # image = "0.25.6"
 rand = {workspace = true}
 divan = "0.1.21"
+dhat = "*"
+
+
+[features]
+dhat-heap = []    # if you are doing heap profiling
+dhat-ad-hoc = []  # if you are doing ad hoc profiling
 
 
 [[bench]]
