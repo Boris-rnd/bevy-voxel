@@ -1,5 +1,5 @@
 **/target
-**/assets/*.zip
-**/assets/textures
-**/assets/images
-**/*.svg
+
+# For the texture pack I downloaded
+**/.zip
+**/RealisCraft

@@ -6,7 +6,7 @@ use crate::*;
 pub struct VoxelChunk {
     // Todo: change idx_in_parent to u8 with 2 bits allocated to prefix_in_block_data_array ?
     pub idx_in_parent: u32,
-    pub inner: [u32; ((CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE).div_ceil(32))],
+    pub inner: [u32; CHUNK_U32_LEN],
     pub prefix_in_block_data_array: [u32; 4],
 }
 impl VoxelChunk {
@@ -144,12 +144,12 @@ impl VoxelChunk {
         if bc == 64 {bc=63}
         size_to_array_array_idx(bc)
     }
-    pub fn local_pos_to_map_data_id(&self, local_pos: LocalPos) -> MapDataID {
-        assert!(
-            local_pos.idx < CHUNK_CUBE_SIZE32,
-            "Index out of bounds: {}",
-            local_pos.idx
-        );
+    pub const fn local_pos_to_map_data_id(&self, local_pos: LocalPos) -> MapDataID {
+        // assert!(
+        //     local_pos.idx < CHUNK_CUBE_SIZE32,
+        //     "Index out of bounds: {}",
+        //     local_pos.idx
+        // );
         let local_idx = local_pos.idx / 32;
         let local_bit = local_pos.idx % 32;
         let mut ones = 0;
@@ -163,20 +163,20 @@ impl VoxelChunk {
             (((1 << local_bit) - 1) & self.inner[local_idx as usize]).count_ones() as u32;
         //todo: make sure it works
         let chunk_idx = curr_set_bits + ones;
-        assert!(chunk_idx < 64, "Chunk idx out of bounds: {} {self:?} {local_pos:?}", chunk_idx);
+        // assert!(chunk_idx < 64, "Chunk idx out of bounds: {} {self:?} {local_pos:?}", chunk_idx);
         let curr_array = size_to_array_array_idx(chunk_idx);
         let local_array_idx = chunk_idx - array_array_idx_to_prefix_size(curr_array) as u32;
         let array_idx = self.prefix_in_block_data_array[curr_array as usize] + local_array_idx;
         
-        assert!(
-            array_idx >= self.prefix_in_block_data_array[curr_array as usize]
-            && (array_idx as u32) < (self.prefix_in_block_data_array[curr_array as usize]
-                        + array_array_idx_to_size(self.array_array_idx()) as u32),
-            "Invalid local position {:?} {} !> {}",
-            local_pos,
-            curr_array as usize,
-            self.prefix_in_block_data_array[curr_array as usize]
-        );
+        // assert!(
+        //     array_idx >= self.prefix_in_block_data_array[curr_array as usize]
+        //     && (array_idx as u32) < (self.prefix_in_block_data_array[curr_array as usize]
+        //                 + array_array_idx_to_size(self.array_array_idx()) as u32),
+        //     "Invalid local position {:?} {} !> {}",
+        //     local_pos,
+        //     curr_array as usize,
+        //     self.prefix_in_block_data_array[curr_array as usize]
+        // );
         MapDataID::new(
             array_idx,
             curr_array,
@@ -199,10 +199,10 @@ pub const fn array_array_idx_to_size(array_array_idx: u8) -> usize {
         _ => unreachable!(),
     }
 }
+const SIZES0: u32 = array_array_idx_to_prefix_size(1) as u32;
+const SIZES1: u32 = array_array_idx_to_prefix_size(2) as u32;
+const SIZES2: u32 = array_array_idx_to_prefix_size(3) as u32;
 pub const fn size_to_array_array_idx(size: u32) -> u8 {
-    const SIZES0: u32 = array_array_idx_to_prefix_size(1) as u32;
-    const SIZES1: u32 = array_array_idx_to_prefix_size(2) as u32;
-    const SIZES2: u32 = array_array_idx_to_prefix_size(3) as u32;
     match size {
         (0..SIZES0) => 0,
         (SIZES0..SIZES1) => 1,
@@ -265,7 +265,7 @@ impl MapDataID {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct VoxelChunkID {
     pub array_idx: u32,
 }
@@ -284,3 +284,4 @@ pub const CHUNK_MASK_SIZE: u32 = CHUNK_MASK.count_ones();
 pub const CHUNK_SIZE: usize = 4;
 pub const CHUNK_SIZE32: u32 = CHUNK_SIZE as _;
 pub const CHUNK_CUBE_SIZE32: u32 = ((CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as u32);
+pub const CHUNK_U32_LEN: usize = (CHUNK_CUBE_SIZE32 as usize).div_ceil(32);

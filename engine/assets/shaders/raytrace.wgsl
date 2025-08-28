@@ -115,32 +115,38 @@ fn hit(ray: Ray) -> HitRecordResult {
     if is_accumulating_frames() == true {
         max_iter = 1000;
     }
+    var bit_mask_for_chunk = array<u32, 2>();
     for (var iter = 0; iter < max_iter; iter = iter + 1) {
         // Query world at current integer voxel position
         let posi = vec3<i32>(posf);
         let parent_pos = parent_pos_stack[curr_depth - 1u];
+        // Get chunk's child size as integer
         let child_size_i = i32(depth_to_chunk_size(curr_depth));
         let local_pos = div_euclid_v3(posi - parent_pos, vec3(child_size_i));
         if any((posi - parent_pos)<vec3(0)) || any(local_pos >= vec3(i32(CHUNK_SIZE))) {
+            // Outside of previous chunk, if curr_depth==1, then outside of root chunk so won't hit anything else
             if curr_depth == 1u { 
                 break;
-             }
+            }
+            // Ascent
             curr_depth -= 1u;
             curr_chunks_len -= 1u;
             continue;
         }
 
         var chunk_idx = u32(local_pos.x) | (u32(local_pos.y) << CHUNK_SHIFT) | (u32(local_pos.z) << (CHUNK_SHIFT*2));
+        bit_mask_for_chunk[chunk_idx/32u] = bit_mask_for_chunk[chunk_idx/32u] | (1u << (chunk_idx % 32u));
         let map_data_idx = get_data_idx_in_chunk(curr_chunks[curr_chunks_len - 1u], chunk_idx);
+        // Checks if bit is set, if so computes the idx, else returns U32::MAX (which will be bigger than arrayLength)
         if map_data_idx.array_idx < arrayLengthBlockData(map_data_idx.array_array_idx) {
             let curr_data = get_block_data_follow_tails(map_data_idx);
-            if curr_data == 4294967295u {
-                break;
+            if curr_data == 4294967295u { // Never happens but maybe one day i'll introduce a breaking bug
+                return valid_res(vec3(1., 0., 1.));
             }
+            // let curr_data = get_block_data(MapDataID(map_data_idx.array_array_idx, map_data_idx.array_idx)).data;
+        
             let ty = curr_data & 3u;
-
-            if ty == 1u {
-                // descend
+            if ty == 1u { // Chunk, so we descend into it
                 idx_stack[curr_depth - 1u] = chunk_idx;
                 parent_pos_stack[curr_depth] = parent_pos + vec3<i32>(
                     local_pos.x * child_size_i,
@@ -148,36 +154,36 @@ fn hit(ray: Ray) -> HitRecordResult {
                     local_pos.z * child_size_i
                 );
                 curr_chunks[curr_chunks_len] = voxel_chunks[curr_data >> 2];
-                curr_chunks_len += 1u;
-                curr_depth += 1u;
-                continue; // IMPORTANT: re-evaluate at new depth
-            } else if ty == 2u {
-                // break;
+                if ((curr_chunks[curr_chunks_len].inner[0]&bit_mask_for_chunk[0]) == 0u) && ((curr_chunks[curr_chunks_len].inner[1]&bit_mask_for_chunk[1]) == 0u) {
+                } else {
+                    curr_chunks_len += 1u;
+                    curr_depth += 1u;
+                    continue; // IMPORTANT: re-evaluate at new depth
+                }
+            } else if ty == 2u { // Block
                 return hit_box_gen(ray, Box(vec3<f32>(posi), vec3<f32>(posi) + vec3(1.0), u32(curr_data>>2))); // making posi = 0 and rb 10000 is fun
             }
         }
-        if map_data_idx.array_array_idx != 4294967295u {
-            return valid_res(vec3(0., 1., 1.));
-        }
-        // if (true) {continue;}
-        let S = f32(max(1, child_size_i));               // size of a child cell at current depth
-        let world_pos_in_parent = posf-vec3<f32>(parent_pos);
+        // Should be useless check but I like to keep it
+        // Check if we have found something
+        // if map_data_idx.array_array_idx != 4294967295u {
+        //     return valid_res(vec3(0., 1., 1.));
+        // }
+        let S = f32(child_size_i);
+        let world_pos_in_parent = posf - vec3<f32>(parent_pos);
 
         // handle zeros
         let inf = 1e30;
-        let normed = world_pos_in_parent / S; 
-        var idxf = div_euclid_f32_v3(world_pos_in_parent, vec3(f32(S)));
-        idxf = floor(normed);
-        // idxf = floor(world_pos_in_parent)*S;
+        let idxf = floor(world_pos_in_parent / S);
         let next = select(idxf*S, (idxf+vec3(1.))*S, stepf>vec3(0.));
-        var tMax = select(vec3(inf), (next - world_pos_in_parent) * rcp, dir != vec3(0.));
+        var tMax = (next - world_pos_in_parent) * rcp;
         let tStep = min(tMax.x, min(tMax.y, tMax.z));
-        if !(tStep < inf) { 
-            return valid_res(vec3(1., 0., 1.));
-         }
+        // if !(tStep < inf) { 
+        //     return valid_res(vec3(1., 0., 1.));
+        //  }
 
         // nudge with scale-aware epsilon
-        let eps = 1e-3 * max(1.0, S);
+        let eps = 1e-3 * S;
         posf += dir * (tStep + eps);
     }
 

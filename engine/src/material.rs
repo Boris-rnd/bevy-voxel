@@ -77,14 +77,9 @@ use super::*;
 
 pub fn get_raw_atlas() -> Result<(Vec<u8>, UVec3)> {
     let mut imgs_raw = Vec::new();
-    let additionnal_paths = vec![
-        "engine/assets/textures/block/diamond_block.png",
-        "engine/assets/textures/block/cobblestone.png",
-        "engine/assets/textures/block/dirt.png",
-        "engine/assets/textures/block/oak_log.png",
-    ];
+    let additionnal_paths: Vec<&'static str> = vec![];
     let target_size = 32; // Define target size for width and height
-    for entry in std::fs::read_dir("engine/assets/images").expect("Failed to read assets/images directory")
+    for entry in std::fs::read_dir("engine/assets/textures").expect("Failed to read assets/images directory")
         .filter(|path| path.is_ok())
         .map(|path| path.unwrap().path())
         .chain(additionnal_paths.into_iter().map(|p| p.into()))

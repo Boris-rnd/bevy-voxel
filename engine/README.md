@@ -14,3 +14,5 @@ Then you can just
 clear && cargo r
 ```
 
+valgrind --tool=callgrind --callgrind-out-file=callgrind.out --collect-jumps=yes --simulate-cache=yes
+
