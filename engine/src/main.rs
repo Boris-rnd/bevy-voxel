@@ -48,16 +48,18 @@ fn main() {
         // Material2dPlugin::<CustomMaterial>::default(),
         Material2dPlugin::<PassthroughMaterial>::default(),
         ExtractResourcePlugin::<ReadbackBuffer>::default(),
+        ExtractResourcePlugin::<BeamReadbackBuffer>::default(),
         ExtractResourcePlugin::<AccumulatedTexture>::default(),
         ExtractResourcePlugin::<ComputeAtlas>::default(),
         ExtractResourcePlugin::<FragCamera>::default(),
         // bevy::render::diagnostic::RenderDiagnosticsPlugin,  
         bevy_app_compute::prelude::AppComputePlugin,
         // bevy_app_compute::prelude::AppComputeWorkerPlugin::<SimpleComputeWorker>::default()
+        compute::GpuReadbackPlugin,
+        compute::BeamGpuReadbackPlugin,
+        bevy::diagnostic::FrameTimeDiagnosticsPlugin::default(),
+        iyes_perf_ui::PerfUiPlugin,
     ))
-    .add_plugins(compute::GpuReadbackPlugin)
-    .add_plugins(bevy::diagnostic::FrameTimeDiagnosticsPlugin::default())
-    .add_plugins(iyes_perf_ui::PerfUiPlugin)
     // .add_systems(Startup, (_setup, compute::setup))
     .add_systems(Startup, (_setup.after(compute::setup), compute::setup))
     .add_systems(Update, update)

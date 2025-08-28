@@ -13,64 +13,62 @@
 
 // @group(0) @binding(5) var base_sampler: sampler;
 include! utils.wgsl
+include! raytrace_common.wgsl
 
 
 // @group(2) @binding(100) var<uniform> cam.img_size: vec2<f32>;
 
 
-// #ifdef _CHUNK_SIZE
-//     const CHUNK_SIZE: u32 = _CHUNK_SIZE;
-// #endif
-const CHUNK_U32_COUNT = CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE/32;
-// const CHUNK_U32_COUNT = 1;
-const CHUNK_SIZE: u32 = #{_CHUNK_SIZE};
-const CHUNK_MASK = CHUNK_SIZE - 1u;
-const CHUNK_SHIFT = countOneBits(CHUNK_MASK);
+fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
+    var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
 
-struct DataResult {
-    data: u32,
-    depth: u32,
+    var t = hit_box_t(ray, box.min, box.max);
+    if t == INVALID_BOX_HIT {
+        return res; // No hit
+    }
+    res.valid = true;
+    res.rec.p = at(ray, t);
+    let center = (box.min + box.max) / 2.;
+    var circle_normal = center - res.rec.p;
+
+    var uv: vec2<f32>;
+    var data: u32 = box.texture_id;
+    if circle_normal.x > abs(circle_normal.y) && circle_normal.x > abs(circle_normal.z) {
+        uv = (circle_normal).zy;
+        circle_normal = vec3(1., 0., 0.);
+    } else if circle_normal.x < -abs(circle_normal.y) && circle_normal.x < -abs(circle_normal.z) {
+        uv = (circle_normal).zy;
+        circle_normal = vec3(-1., 0., 0.);
+    } else if circle_normal.z > abs(circle_normal.y) && circle_normal.z > abs(circle_normal.x) {
+        uv = (circle_normal).xy;
+        circle_normal = vec3(0., 0., 1.);
+    } else if circle_normal.z < -abs(circle_normal.y) && circle_normal.z < -abs(circle_normal.x) {
+        uv = (circle_normal).xy;
+        circle_normal = vec3(0., 0., -1.);
+    } else if circle_normal.y > abs(circle_normal.x) && circle_normal.y > abs(circle_normal.z) {
+        uv = (circle_normal).xz;
+        circle_normal = vec3(0., 1., 0.);
+        // data = 1;
+    } else if circle_normal.y < -abs(circle_normal.x) && circle_normal.y < -abs(circle_normal.z) {
+        uv = (circle_normal).xz;
+        circle_normal = vec3(0., -1., 0.);
+        // data = 1;
+    } else {
+        circle_normal = vec3(1., 1.5, 1.);
+    }
+    res.rec.normal = circle_normal;
+    res.rec.t = t;
+    res.rec.front_face = false;
+    // data = data%7;
+    if data > 5 {
+        res.rec.color = vec3(0., f32(data) / 255., f32(data) / 255.);
+    } else {
+        let texcoord = vec2<u32>((uv + vec2(0.5)) * 32.0);
+        let srgb = textureLoad(atlas, texcoord, data).xyz;
+        res.rec.color = srgb_to_linear(srgb);
+    }
+    return res;
 }
-/// Returns root chunk data if not found
-/// max depth starts at 1
-/// Returns block_data, so also has the ty in first 2 bits
-// fn get_data_in_chunk(pos: vec3<i32>, chk: VoxelChunk, par_pos: vec3<i32>, dep: u32, max_depth: u32) -> DataResult {
-//     // if pos.x==1 {return u32(1);}
-//     // else {return u32(4294967295);} 
-//     var chunk = chk;
-//     var local_pos = vec3<i32>(0);
-//     var parent_pos = par_pos;
-//     var end_depth = dep;
-//     var curr_data = 1u; // Root chunk
-//     var prev_idx = 0u;
-//     for (var depth = dep; depth <= max_depth; depth++) {
-//         end_depth = depth;
-//         let chunk_size = i32(depth_to_chunk_size(depth-1));
-//         parent_pos += ((vec3<i32>(vec3(prev_idx & 3, (prev_idx >> 2) & 3, (prev_idx >> 4) & 3))) * chunk_size);
-//         local_pos = div_euclid_v3(pos - parent_pos, vec3<i32>(chunk_size >> 2));
-//         if any(local_pos >= vec3(4) || local_pos < vec3(0)) {return DataResult(0, 0);}
-//         var idx = u32(local_pos.x) + (u32(local_pos.y) << CHUNK_SHIFT) + u32((local_pos.z) << (CHUNK_SHIFT*2));
-//         prev_idx = idx;
-
-//         let map_data_idx = get_data_idx_in_chunk(chunk, idx);
-//         if u32(map_data_idx) > arrayLength(&block_data) { // Also takes into account if map_data_idx == 4294967295u {break;}
-//             break; // Out of bounds
-//         }
-//         curr_data = block_data[map_data_idx].data;
-//         let ty = curr_data & 3;
-//         if ty == 2 { // Block
-//             return DataResult(curr_data, u32(depth)); // Return texture id
-//         } else if ty == 1 { // Chunk
-//             // return set_bits; // Return texture id
-//             chunk = voxel_chunks[curr_data >> 2];
-//         } else { // Error
-//             // return u32(4294967295); // u32::MAX
-//             break;
-//         }
-//     }
-//     // Returns root chunk if nothing found or latest chunk
-//     return DataResult(curr_data, u32(end_depth));
-// }
 fn hit(ray: Ray) -> HitRecordResult {
     var miss = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
 
@@ -189,78 +187,11 @@ fn hit(ray: Ray) -> HitRecordResult {
 
     return miss;
 }
-
-const INVALID_BOX_HIT: f32 = 3*10e10;
-fn hit_box_t(ray: Ray, bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
-    let t135 = (bmax - ray.orig) / ray.dir;
-    let t246 = (bmin - ray.orig) / ray.dir;
-
-    let tmin = max(max(min(t135.x, t246.x), min(t135.y, t246.y)), min(t135.z, t246.z));
-    let tmax = min(min(max(t135.x, t246.x), max(t135.y, t246.y)), max(t135.z, t246.z));
-
-    if tmin > tmax || tmax < 0 {
-        return INVALID_BOX_HIT;
-    }
-    return tmin;
-}
-
-fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
-    var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
-
-    var t = hit_box_t(ray, box.min, box.max);
-    if t == INVALID_BOX_HIT {
-        return res; // No hit
-    }
-    res.valid = true;
-    res.rec.p = at(ray, t);
-    let center = (box.min + box.max) / 2.;
-    var circle_normal = center - res.rec.p;
-
-    var uv: vec2<f32>;
-    var data: u32 = box.texture_id;
-    if circle_normal.x > abs(circle_normal.y) && circle_normal.x > abs(circle_normal.z) {
-        uv = (circle_normal).zy;
-        circle_normal = vec3(1., 0., 0.);
-    } else if circle_normal.x < -abs(circle_normal.y) && circle_normal.x < -abs(circle_normal.z) {
-        uv = (circle_normal).zy;
-        circle_normal = vec3(-1., 0., 0.);
-    } else if circle_normal.z > abs(circle_normal.y) && circle_normal.z > abs(circle_normal.x) {
-        uv = (circle_normal).xy;
-        circle_normal = vec3(0., 0., 1.);
-    } else if circle_normal.z < -abs(circle_normal.y) && circle_normal.z < -abs(circle_normal.x) {
-        uv = (circle_normal).xy;
-        circle_normal = vec3(0., 0., -1.);
-    } else if circle_normal.y > abs(circle_normal.x) && circle_normal.y > abs(circle_normal.z) {
-        uv = (circle_normal).xz;
-        circle_normal = vec3(0., 1., 0.);
-        // data = 1;
-    } else if circle_normal.y < -abs(circle_normal.x) && circle_normal.y < -abs(circle_normal.z) {
-        uv = (circle_normal).xz;
-        circle_normal = vec3(0., -1., 0.);
-        // data = 1;
-    } else {
-        circle_normal = vec3(1., 1.5, 1.);
-    }
-    res.rec.normal = circle_normal;
-    res.rec.t = t;
-    res.rec.front_face = false;
-    // data = data%7;
-    if data > 5 {
-        res.rec.color = vec3(0., f32(data) / 255., f32(data) / 255.);
-    } else {
-        let texcoord = vec2<u32>((uv + vec2(0.5)) * 32.0);
-        let srgb = textureLoad(atlas, texcoord, data).xyz;
-        res.rec.color = srgb_to_linear(srgb);
-    }
-    return res;
-}
 fn ray_color(ray2: Ray) -> vec3<f32> {
     var ray = ray2;
 
-    let unit_direction = normalize(ray.dir);
-    let a = 0.5 * (unit_direction.y + 1.0);
+    let a = 0.5 * (ray.dir.y + 1.0);
     var c = (1.0 - a) * vec3(1.0, 1.0, 1.0) + a * vec3(0.5, 0.7, 1.0);
-    // c *= c*c*vec3(0.5, 0., 0.);
 
     for (var i = 1; i < 10; i += 10) {
         var res = hit(ray);
@@ -280,6 +211,7 @@ fn ray_color(ray2: Ray) -> vec3<f32> {
     }
     return c;
 }
+
 
 fn compute(global_id: vec2<u32>) {
     
@@ -341,7 +273,7 @@ fn compute(global_id: vec2<u32>) {
             let p = random_in_unit_disk();
             orig += (p.x * defocus_disk_u) + (p.y * defocus_disk_v);
         }
-        let r = Ray(orig, pixel_center - lookfrom);
+        let r = Ray(orig, normalize(pixel_center - lookfrom));
         c += ray_color(r) / f32(samples_per_pixel);
     }
     
