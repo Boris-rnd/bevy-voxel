@@ -508,7 +508,7 @@ fn ray_depth(ray: Ray) -> f32 {
 
     // Main traversal
     // Hard cap to avoid infinite loops in degenerate cases
-    var max_iter = 50;
+    var max_iter = 500;
     var bit_mask_for_chunk = array<u32, 2>();
     for (var iter = 0; iter < max_iter; iter = iter + 1) {
         // Query world at current integer voxel position
@@ -520,7 +520,7 @@ fn ray_depth(ray: Ray) -> f32 {
         if any((posi - parent_pos)<vec3(0)) || any(local_pos >= vec3(i32(CHUNK_SIZE))) {
             // Outside of previous chunk, if curr_depth==1, then outside of root chunk so won't hit anything else
             if curr_depth == 1u { 
-                break;
+                return 1e30;
             }
             // Ascent
             curr_depth -= 1u;
@@ -535,7 +535,7 @@ fn ray_depth(ray: Ray) -> f32 {
         if map_data_idx.array_idx < arrayLengthBlockData(map_data_idx.array_array_idx) {
             let curr_data = get_block_data_follow_tails(map_data_idx);
             if curr_data == 4294967295u { // Never happens but maybe one day i'll introduce a breaking bug
-                return ray_t_from_pos(ray, posf)-eps;
+                break;
             }
             // let curr_data = get_block_data(MapDataID(map_data_idx.array_array_idx, map_data_idx.array_idx)).data;
         
@@ -555,7 +555,7 @@ fn ray_depth(ray: Ray) -> f32 {
                     continue; // IMPORTANT: re-evaluate at new depth
                 }
             } else if ty == 2u { // Block
-                return ray_t_from_pos(ray, posf)-eps;
+                break;
             }
         }
         // Should be useless check but I like to keep it
@@ -580,8 +580,9 @@ fn ray_depth(ray: Ray) -> f32 {
         let eps = 1e-3 * S;
         posf += dir * (tStep + eps);
     }
-
-    return max_depth;
+return ray_t_from_pos(ray, posf)-eps;
+// return ray_t_from_pos(ray, posf)-eps;
+    // return max_depth;
 }
 
 // Make sure ray.dir is normalized and != 0
@@ -592,7 +593,7 @@ fn ray_t_from_pos(ray: Ray, pos: vec3<f32>) -> f32 {
 
 
 
-fn compute(global_id: vec2<u32>) {
+fn compute(global_id: vec2<u32>) -> f32 {
     let i = f32(global_id.x);
     let j = (1. - f32(global_id.y)/f32(cam.img_size.y)) * f32(cam.img_size.y);
     let lookfrom = cam.center;     // Point camera is looking from
@@ -630,8 +631,8 @@ fn compute(global_id: vec2<u32>) {
     let pixel_center = pixel00_loc + ((i) * pixel_delta_u) + ((j) * pixel_delta_v);
     var orig = lookfrom;
     let r = Ray(orig, normalize(pixel_center - lookfrom));
-
-    max_depth[global_id.x+global_id.y*(cam.img_size.x)] = ray_depth(r);
+    // while (true) {}
+    return ray_depth(r);
 }
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -640,5 +641,5 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if x >= cam.img_size.x || y >= cam.img_size.y {
         return;
     }
-    compute(vec2<u32>(x, y));
+    max_depth[global_id.x+global_id.y*(cam.img_size.x/2)] = compute(vec2<u32>(x, y));
 }

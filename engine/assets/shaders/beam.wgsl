@@ -11,7 +11,7 @@ include! raytrace_common.wgsl
 
 
 
-fn compute(global_id: vec2<u32>) {
+fn compute(global_id: vec2<u32>) -> f32 {
     let i = f32(global_id.x);
     let j = (1. - f32(global_id.y)/f32(cam.img_size.y)) * f32(cam.img_size.y);
     let lookfrom = cam.center;     // Point camera is looking from
@@ -49,8 +49,8 @@ fn compute(global_id: vec2<u32>) {
     let pixel_center = pixel00_loc + ((i) * pixel_delta_u) + ((j) * pixel_delta_v);
     var orig = lookfrom;
     let r = Ray(orig, normalize(pixel_center - lookfrom));
-
-    max_depth[global_id.x+global_id.y*(cam.img_size.x)] = ray_depth(r);
+    // while (true) {}
+    return ray_depth(r);
 }
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -59,5 +59,5 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if x >= cam.img_size.x || y >= cam.img_size.y {
         return;
     }
-    compute(vec2<u32>(x, y));
+    max_depth[global_id.x+global_id.y*(cam.img_size.x/2)] = compute(vec2<u32>(x, y));
 }

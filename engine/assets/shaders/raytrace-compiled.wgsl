@@ -3,7 +3,7 @@
 
 @group(0) @binding(0) var<storage, read_write> accumulated_tex: array<u32>;
 @group(0) @binding(1) var<uniform> cam: Camera;
-@group(0) @binding(2) var<storage, read_write> accumulated_tex2: array<u32>;
+@group(0) @binding(2) var<storage, read> max_depth: array<f32>;
 @group(0) @binding(3) var atlas: texture_storage_2d_array<rgba8unorm, read>;
 @group(0) @binding(4) var<storage, read> voxel_chunks: array<VoxelChunk>;
 @group(0) @binding(5) var<storage, read> block_data0: array<MapData>;
@@ -514,7 +514,7 @@ fn ray_depth(ray: Ray) -> f32 {
 
     // Main traversal
     // Hard cap to avoid infinite loops in degenerate cases
-    var max_iter = 50;
+    var max_iter = 500;
     var bit_mask_for_chunk = array<u32, 2>();
     for (var iter = 0; iter < max_iter; iter = iter + 1) {
         // Query world at current integer voxel position
@@ -526,7 +526,7 @@ fn ray_depth(ray: Ray) -> f32 {
         if any((posi - parent_pos)<vec3(0)) || any(local_pos >= vec3(i32(CHUNK_SIZE))) {
             // Outside of previous chunk, if curr_depth==1, then outside of root chunk so won't hit anything else
             if curr_depth == 1u { 
-                break;
+                return 1e30;
             }
             // Ascent
             curr_depth -= 1u;
@@ -541,7 +541,7 @@ fn ray_depth(ray: Ray) -> f32 {
         if map_data_idx.array_idx < arrayLengthBlockData(map_data_idx.array_array_idx) {
             let curr_data = get_block_data_follow_tails(map_data_idx);
             if curr_data == 4294967295u { // Never happens but maybe one day i'll introduce a breaking bug
-                return ray_t_from_pos(ray, posf)-eps;
+                break;
             }
             // let curr_data = get_block_data(MapDataID(map_data_idx.array_array_idx, map_data_idx.array_idx)).data;
         
@@ -561,7 +561,7 @@ fn ray_depth(ray: Ray) -> f32 {
                     continue; // IMPORTANT: re-evaluate at new depth
                 }
             } else if ty == 2u { // Block
-                return ray_t_from_pos(ray, posf)-eps;
+                break;
             }
         }
         // Should be useless check but I like to keep it
@@ -586,8 +586,9 @@ fn ray_depth(ray: Ray) -> f32 {
         let eps = 1e-3 * S;
         posf += dir * (tStep + eps);
     }
-
-    return max_depth;
+return ray_t_from_pos(ray, posf)-eps;
+// return ray_t_from_pos(ray, posf)-eps;
+    // return max_depth;
 }
 
 // Make sure ray.dir is normalized and != 0
@@ -647,6 +648,9 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
         let texcoord = vec2<u32>((uv + vec2(0.5)) * 32.0);
         let srgb = textureLoad(atlas, texcoord, data).xyz;
         res.rec.color = srgb_to_linear(srgb);
+        if data==2 {
+            res.rec.color *= 4.;
+        }
     }
     return res;
 }
@@ -735,10 +739,10 @@ fn hit(ray: Ray) -> HitRecordResult {
                 curr_chunks[curr_chunks_len] = voxel_chunks[curr_data >> 2];
                 if ((curr_chunks[curr_chunks_len].inner[0]&bit_mask_for_chunk[0]) == 0u) && ((curr_chunks[curr_chunks_len].inner[1]&bit_mask_for_chunk[1]) == 0u) {
                 } else {
-                    curr_chunks_len += 1u;
-                    curr_depth += 1u;
-                    continue; // IMPORTANT: re-evaluate at new depth
                 }
+                curr_chunks_len += 1u;
+                curr_depth += 1u;
+                continue; // IMPORTANT: re-evaluate at new depth
             } else if ty == 2u { // Block
                 return hit_box_gen(ray, Box(vec3<f32>(posi), vec3<f32>(posi) + vec3(1.0), u32(curr_data>>2))); // making posi = 0 and rb 10000 is fun
             }
@@ -774,17 +778,17 @@ fn ray_color(ray2: Ray) -> vec3<f32> {
     let a = 0.5 * (ray.dir.y + 1.0);
     var c = (1.0 - a) * vec3(1.0, 1.0, 1.0) + a * vec3(0.5, 0.7, 1.0);
 
-    for (var i = 1; i < 10; i += 10) {
+    for (var i = 1; i < 3; i += 1) {
         var res = hit(ray);
         if res.valid {
-            // if is_accumulating_frames() == false {
-            if true {
+            if is_accumulating_frames() == false {
+            // if true {
                 return res.rec.color;
             }
             // var direction = res.rec.normal + random_unit_vector() * 0.5;
             var direction = reflect(ray.dir, res.rec.normal) + random_unit_vector()*0.2;
             if near_zero(direction) {direction = res.rec.normal;}
-            // c = (c*0.1)+res.rec.color;
+            c *= res.rec.color;
             ray = Ray(res.rec.p, direction);
         } else {
             return c;
@@ -854,7 +858,8 @@ fn compute(global_id: vec2<u32>) {
             let p = random_in_unit_disk();
             orig += (p.x * defocus_disk_u) + (p.y * defocus_disk_v);
         }
-        let r = Ray(orig, normalize(pixel_center - lookfrom));
+        var r = Ray(orig, normalize(pixel_center - lookfrom));
+        r.orig = at(r, max_depth[global_id.x/2+global_id.y/2*(cam.img_size.x/2)]);
         c += ray_color(r) / f32(samples_per_pixel);
     }
     

@@ -110,7 +110,7 @@ fn ray_depth(ray: Ray) -> f32 {
 
     // Main traversal
     // Hard cap to avoid infinite loops in degenerate cases
-    var max_iter = 50;
+    var max_iter = 500;
     var bit_mask_for_chunk = array<u32, 2>();
     for (var iter = 0; iter < max_iter; iter = iter + 1) {
         // Query world at current integer voxel position
@@ -122,7 +122,7 @@ fn ray_depth(ray: Ray) -> f32 {
         if any((posi - parent_pos)<vec3(0)) || any(local_pos >= vec3(i32(CHUNK_SIZE))) {
             // Outside of previous chunk, if curr_depth==1, then outside of root chunk so won't hit anything else
             if curr_depth == 1u { 
-                break;
+                return 1e30;
             }
             // Ascent
             curr_depth -= 1u;
@@ -137,7 +137,7 @@ fn ray_depth(ray: Ray) -> f32 {
         if map_data_idx.array_idx < arrayLengthBlockData(map_data_idx.array_array_idx) {
             let curr_data = get_block_data_follow_tails(map_data_idx);
             if curr_data == 4294967295u { // Never happens but maybe one day i'll introduce a breaking bug
-                return ray_t_from_pos(ray, posf)-eps;
+                break;
             }
             // let curr_data = get_block_data(MapDataID(map_data_idx.array_array_idx, map_data_idx.array_idx)).data;
         
@@ -157,7 +157,7 @@ fn ray_depth(ray: Ray) -> f32 {
                     continue; // IMPORTANT: re-evaluate at new depth
                 }
             } else if ty == 2u { // Block
-                return ray_t_from_pos(ray, posf)-eps;
+                break;
             }
         }
         // Should be useless check but I like to keep it
@@ -182,8 +182,9 @@ fn ray_depth(ray: Ray) -> f32 {
         let eps = 1e-3 * S;
         posf += dir * (tStep + eps);
     }
-
-    return max_depth;
+return ray_t_from_pos(ray, posf)-eps;
+// return ray_t_from_pos(ray, posf)-eps;
+    // return max_depth;
 }
 
 // Make sure ray.dir is normalized and != 0

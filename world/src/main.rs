@@ -18,27 +18,7 @@ fn main() {
     // println!("-----\n");
     
     let start = std::time::Instant::now();
-    let mut world: HashMap<IVec3, MapData> = HashMap::default();
-    let perlin = noise::Perlin::new(1);
-    for x in 0..1024 as i32 {
-        if x%16==0 {
-            print!("Done {}/{}\r", x, 1024);
-            std::io::Write::flush(&mut std::io::stdout()).unwrap();
-        }
-        for y in 1..3 {
-            for z in 0..1024 as i32 {
-                // if perlin.get([x as f64, y as f64, z as f64])>0.0 {
-                world.insert(
-                    ivec3(
-                        x,
-                        ((perlin.get([x as f64 / 50., z as f64 / 50.]) * 10.) as i32 + y).abs(),
-                        z,
-                    ),
-                    MapData::Block(((x + y + z) % 15) as u32),
-                );
-            }
-        }
-    }
+    gen_world();
     println!("Took {:?} to run", start.elapsed());
     println!("-----\n");
 }

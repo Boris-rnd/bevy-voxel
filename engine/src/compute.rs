@@ -90,6 +90,7 @@ impl Plugin for GpuReadbackPlugin {
 pub fn resize_cameras(
     mut frag_camera: ResMut<FragCamera>,
     mut cam_uni: ResMut<CameraUniform>,
+    mut beam_cam_uni: ResMut<BeamCameraUniform>,
     
 
     render_device: Res<RenderDevice>,
@@ -98,6 +99,8 @@ pub fn resize_cameras(
     // dbg!(&frag_camera);
     cam_uni.0.set(frag_camera.clone());
     cam_uni.0.write_buffer(&render_device, &queue);
+    beam_cam_uni.0.set(frag_camera.clone());
+    beam_cam_uni.0.write_buffer(&render_device, &queue);
     // buf.set_data(mat.camera.clone());
 }
 
@@ -108,6 +111,7 @@ fn prepare_bind_group(
     my_buffers: Res<ReadbackBuffer>,
     atlas: Res<ComputeAtlas>,
     image: Res<AccumulatedTexture>,
+    max_depth_buffer: Res<BeamReadbackBuffer>,
     buffers: Res<RenderAssets<GpuShaderStorageBuffer>>,
     camera: Res<FragCamera>,
     images: Res<RenderAssets<GpuImage>>,
@@ -124,7 +128,7 @@ fn prepare_bind_group(
             .as_entire_binding()),
         (1, cam_buf.binding().unwrap()),
         (2, buffers
-            .get(&image.0.1)
+            .get(&max_depth_buffer.max_depth_buffer)
             .unwrap()
             .buffer
             .as_entire_binding()),
@@ -264,7 +268,7 @@ impl FromWorld for ComputePipeline {
                 (
                     storage_buffer::<Vec<u32>>(false),
                     uniform_buffer::<FragCamera>(false),
-                    storage_buffer::<Vec<u32>>(false),
+                    storage_buffer_read_only::<Vec<f32>>(false),
                     binding_types::texture_storage_2d_array(TextureFormat::Rgba8Unorm, StorageTextureAccess::ReadOnly),
                     storage_buffer_read_only::<Vec<VoxelChunk>>(false),
                     storage_buffer_read_only::<Vec<MapDataPacked>>(false),
@@ -326,8 +330,8 @@ impl render_graph::Node for ComputeNode {
             pass.set_bind_group(0, &bind_group.0, &[]);
             pass.set_pipeline(init_pipeline);
             pass.dispatch_workgroups(
-                (camera.img_dims.x + 8 - 1) / 8,
-                (camera.img_dims.y + 8 - 1) / 8,
+                camera.img_dims.x.div_ceil(8),
+                camera.img_dims.y.div_ceil(8),
                 1,
             );
         }
@@ -408,7 +412,8 @@ impl Plugin for BeamGpuReadbackPlugin {
             ((beam_prepare_bind_group)
                 .in_set(RenderSet::PrepareBindGroups)
                 // We don't need to recreate the bind group every frame
-                .run_if(not(resource_exists::<BeamGpuBufferBindGroup>))),
+                .run_if(not(resource_exists::<BeamGpuBufferBindGroup>)), resize_cameras.after(prepare_bind_group)),
+
         );
         // Add the compute node as a top level node to the render graph
         // This means it will only execute once per frame
@@ -480,8 +485,8 @@ impl render_graph::Node for BeamComputeNode {
             return Ok(());
         }
         let pipeline_cache = world.resource::<PipelineCache>();
-        let pipeline = world.resource::<ComputePipeline>();
-        let bind_group = world.resource::<GpuBufferBindGroup>();
+        let pipeline = world.resource::<BeamComputePipeline>();
+        let bind_group = world.resource::<BeamGpuBufferBindGroup>();
         let camera = world.resource::<FragCamera>();
 
 

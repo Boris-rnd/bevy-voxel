@@ -15,27 +15,25 @@ struct Camera {
     img_size: vec2<u32>,
 }
 
-@fragment
-fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    let uv = vec2<u32>(in.uv * vec2<f32>(cam.img_size));
-    let idx = uv.x + uv.y * cam.img_size.x;
-    var data = 0u;
-    // if cam.accum_frames%2==0 { // Inverse from raytrace
-    //     data = accumulated_tex2[idx];
-    // } else {
-    // }
-    data = accumulated_tex[idx];
-    // let data = accumulated_tex[u32((in.uv.x)*f32(cam.img_size.x)+in.uv.y*f32(cam.img_size.y)*f32(cam.img_size.x))];
+fn fetch(idx: u32) -> vec4<u32> {
+    let data = accumulated_tex[idx];
     let r= data&0xffu;
     let g= (data>>8u)&0xffu;
     let b= (data>>16u)&0xffu;
     let a= (data>>24u)&0xffu;
-    // if accumulated_tex[1000] == 0 {
-    //     return vec4(0.);
-    // } else {
+    return vec4(r,g,b,a);
+}
 
-    //     return vec4(1.);
-    // }
-    // return vec4(vec2<f32>(cam.img_size)/200./255., 0., 1.);
+@fragment
+fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    let uv = vec2<u32>(in.uv * vec2<f32>(cam.img_size));
+    let idx = uv.x + uv.y * cam.img_size.x;
+    // var data = 0u;
+    // var data = fetch(idx);
+    var data = (fetch(idx)+fetch(idx+1)+fetch(idx-1)+fetch(idx+cam.img_size.x)+fetch(idx-cam.img_size.x))/5u;
+    let r= data.x;
+    let g= data.y;
+    let b= data.z;
+    let a= data.w;
     return vec4(f32(r)/255., f32(g)/255., f32(b)/255., f32(a)/255.);
 }
