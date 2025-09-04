@@ -40,31 +40,29 @@ impl LocalPos {
 }
 
 pub trait ToLocalPos {
-    fn to_local_pos(&self) -> LocalPos;
+    fn to_local_pos(&self) -> Result<LocalPos>;
 }
 impl ToLocalPos for IVec3 {
     #[track_caller]
-    fn to_local_pos(&self) -> LocalPos {
-        assert!(
-            self.x >= 0 && self.x < CHUNK_SIZE32 as i32 && self.y >= 0 && self.y < CHUNK_SIZE32 as i32 && self.z >= 0 && self.z < CHUNK_SIZE32 as i32,
-            "Local position out of bounds: {}, {}, {}",
-            self.x,
-            self.y,
-            self.z
-        );
-        LocalPos::new(self.x.try_into().unwrap(), self.y.try_into().unwrap(), self.z.try_into().unwrap())
+    fn to_local_pos(&self) -> Result<LocalPos> {
+        if !(
+            self.x >= 0 && self.x < CHUNK_SIZE32 as i32 && self.y >= 0 && self.y < CHUNK_SIZE32 as i32 && self.z >= 0 && self.z < CHUNK_SIZE32 as i32
+        ) {
+            return Err(format!("Local position out of bounds: {}, {}, {}", self.x, self.y, self.z).into());
+        }
+        Ok(LocalPos::new(self.x.try_into()?, self.y.try_into()?, self.z.try_into()?))
     }
 }
 
 impl ToLocalPos for UVec3 {
     #[track_caller]
-    fn to_local_pos(&self) -> LocalPos {
+    fn to_local_pos(&self) -> Result<LocalPos> {
         assert!(self.x < CHUNK_SIZE32  && self.y < CHUNK_SIZE32  && self.z < CHUNK_SIZE32,
             "Local position out of bounds: {}, {}, {}",
             self.x,
             self.y,
             self.z
         );
-        LocalPos::new(self.x.try_into().unwrap(), self.y.try_into().unwrap(), self.z.try_into().unwrap())
+        Ok(LocalPos::new(self.x.try_into()?, self.y.try_into()?, self.z.try_into()?))
     }
 }

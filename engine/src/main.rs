@@ -27,6 +27,7 @@ pub use bevy::{
 pub mod build;
 pub mod camera;
 pub use camera::*;
+use world::parser::load_world;
 pub use world::*;
 pub mod compute;
 pub use compute::*;
@@ -34,7 +35,8 @@ pub mod material;
 pub use material::*;
 
 fn main() {
-    let world = gen_world();
+    // let world = gen_world();
+    let world = load_world("/run/media/sxmourai/Dev/Projets/Initerse/bevy_voxel/engine/assets/world/Church_Of_St_Sophia.vox").unwrap();
     let root_max_depth = world.root_max_depth();
     let mut app = App::new();
     app

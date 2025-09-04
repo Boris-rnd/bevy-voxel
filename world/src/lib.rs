@@ -40,6 +40,7 @@ pub mod common;
 pub mod map_data;
 pub mod shapes;
 pub mod generation;
+pub mod parser;
 pub use chunks::*;
 pub use common::*;
 pub use map_data::*;
@@ -92,6 +93,7 @@ impl GameWorld {
             ..Default::default()
         }
     }
+
     fn block_iter_inner(&mut self, pos: IVec3, map_data: Option<MapData>) -> Option<MapData> {
         if pos.x < self.root_size() as i32
             || pos.y < self.root_size() as i32
@@ -115,6 +117,17 @@ impl GameWorld {
                 parent_pos += chunk.local_pos().ivec3() * chunk_size as i32;
                 local_pos =
                     ((pos - parent_pos).div_euclid(IVec3::splat((chunk_size / CHUNK_SIZE32) as _)));
+                let local_pos_idx = match local_pos.to_local_pos() {
+                    Ok(idx) => idx,
+                    Err(err) => {
+                        eprintln!("Failed to convert local position to local index: {}", err);
+                        eprintln!("Local position: {:?}", local_pos);
+                        eprintln!("Parent position: {:?}", parent_pos);
+                        eprintln!("World position: {:?}", pos);
+                        eprintln!("Whilst trying to write: {:?}", map_data);
+                        return None;
+                    }
+                };
                 log::trace!("{depth}: {local_pos:?} -> Chunk {map_data_id:?} (offset: {parent_pos:?}) with size: {}", chunk_size);
                 if chunk_size == CHUNK_SIZE32 && map_data.is_some() {
                     // If the chunk is 4x4x4, we can set the block directly
@@ -123,14 +136,14 @@ impl GameWorld {
                     );
                     self.set_data_in_chunk(
                         map_data_id,
-                        local_pos.to_local_pos(),
+                        local_pos_idx,
                         map_data.unwrap(),
                     );
                     return None;
                 }
 
                 // If the chunk is smaller, we need to go deeper
-                match self.get_data_in_chunk(map_data_id, local_pos.to_local_pos()) {
+                match self.get_data_in_chunk(map_data_id, local_pos_idx) {
                     Some(data) => match data {
                         MapData::Chunk(id) => {
                             let id = VoxelChunkID::new(id);
@@ -144,7 +157,7 @@ impl GameWorld {
                                     local_pos,
                                     map_data
                                 );
-                                self.set_data_in_chunk(map_data_id, local_pos.to_local_pos(), data);
+                                self.set_data_in_chunk(map_data_id, local_pos_idx, data);
                             }
                             None => return Some(data),
                         },
@@ -168,16 +181,16 @@ impl GameWorld {
                             Some(data) => {
                                 // Setting block
                                 map_data_id =
-                                    self.alloc_new_chunk(local_pos.to_local_pos(), map_data_id);
+                                    self.alloc_new_chunk(local_pos_idx, map_data_id);
                             } // Get block
                             None => {
                                 log::trace!("No data found in chunk {map_data_id:?} at local pos {local_pos:?}, returning None");
                                 log::trace!(
                                     "{local_pos}={} in {:b}",
-                                    local_pos.to_local_pos().idx,
+                                    local_pos_idx.idx,
                                     chunk.block_count()
                                 );
-                                if chunk.get_block(local_pos.to_local_pos()) {
+                                if chunk.get_block(local_pos_idx) {
                                     log::trace!("But bit is set !");
                                 }
                                 return None;
@@ -573,7 +586,7 @@ impl GameWorld {
                 ((pos - parent_pos).div_euclid(IVec3::splat((chunk_size / CHUNK_SIZE32) as _)));
 
             // If the chunk is smaller, we need to go deeper
-            match self.get_data_in_chunk(map_data_id, local_pos.to_local_pos()) {
+            match self.get_data_in_chunk(map_data_id, local_pos.to_local_pos().unwrap()) {
                 Some(data) => match data {
                     MapData::Chunk(id) => {
                         map_data_id = VoxelChunkID::new(id);

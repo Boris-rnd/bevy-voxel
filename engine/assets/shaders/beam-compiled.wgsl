@@ -85,41 +85,67 @@ fn random_in_unit_disk() -> vec3<f32> {
     }
     return vec3(0.);
 }
+var<private> rng_state: u32;
 
-fn xorshift_rand(seed: u32) -> u32 {
-    var rand = seed ^ (seed << 13);
-    rand = rand >> 17;
-    rand = rand << 5;
-    return rand;
+// Initialize RNG state based on pixel coordinates and frame number
+fn init_rng(pixel: vec2<u32>, frame: u32) {
+    // Combine pixel coordinates and frame into a unique seed
+    rng_state = wang_hash(pixel.x + wang_hash(pixel.y + wang_hash(frame)));
 }
-fn xorshift_randf32(seed: f32) -> f32 {
-    return f32(xorshift_rand(u32(seed)));
+
+// Improved Wang hash function
+fn wang_hash(seed: u32) -> u32 {
+    var s = seed;
+    s = (s ^ 61u) ^ (s >> 16u);
+    s = s + (s << 3u);
+    s = s ^ (s >> 4u);
+    s = s * 0x27d4eb2du;
+    s = s ^ (s >> 15u);
+    return s;
 }
-fn wang_hash(u: u32) -> u32 {
-    var x = u;
-    x = (x ^ 61u) ^ (x >> 16u);
-    x = x * 9u;
-    x = x ^ (x >> 4u);
-    x = x * 0x27d4eb2du;
-    x = x ^ (x >> 15u);
+
+// PCG random number generator (high quality, fast)
+fn pcg_random() -> u32 {
+    let oldstate = rng_state;
+    rng_state = oldstate * 747796405u + 2891336453u;
+    let word = ((oldstate >> ((oldstate >> 28u) + 4u)) ^ oldstate) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+// Xorshift32 (corrected implementation)
+fn xorshift32() -> u32 {
+    var x = rng_state;
+    x ^= x << 13u;
+    x ^= x >> 17u;
+    x ^= x << 5u;
+    rng_state = x;
     return x;
 }
 
-fn rand_01_wang() -> f32 {
-    let u = bitcast<u32>(rng_seed);
-    let h = wang_hash(u);
-    let r = f32(h) / 4294967296.0; // 2^32;
-    rng_seed = r;
-    return r;
+// Main random float function [0, 1)
+fn random_f32() -> f32 {
+    return f32(pcg_random()) * (1.0 / 4294967296.0);
 }
 
-fn rand_01() -> f32 {
-    let r = abs(fract(sin(xorshift_randf32((sin(rng_seed / 3.3) * 43758.5453)))));
-    rng_seed = r;
-    return r;
+// Alternative using bitcast for better distribution
+fn random_f32_uniform() -> f32 {
+    let bits = pcg_random();
+    let float_bits = (bits >> 9u) | 0x3f800000u; // [1.0, 2.0)
+    return bitcast<f32>(float_bits) - 1.0;
 }
+
+// Random float in range [min, max)
 fn rand(min: f32, max: f32) -> f32 {
-    return min + rand_01_wang() * (max - min);
+    return min + random_f32() * (max - min);
+}
+
+// Box-Muller transform for normal distribution (useful for blur effects)
+fn random_gaussian() -> vec2<f32> {
+    let u1 = max(0.00001, random_f32()); // Avoid log(0)
+    let u2 = random_f32();
+    let r = sqrt(-2.0 * log(u1));
+    let theta = 2.0 * 3.14159265359 * u2;
+    return vec2<f32>(r * cos(theta), r * sin(theta));
 }
 fn vec3_rand(min: f32, max: f32) -> vec3<f32> {
     return vec3(rand(min, max), rand(min, max), rand(min, max));
@@ -220,7 +246,7 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 }
 
 fn is_accumulating_frames() -> bool {
-    return cam.accum_frames > 1;
+    return cam.accum_frames > 20;
 }
 
 struct MapDataID {
@@ -467,6 +493,24 @@ fn hit_box_t(ray: Ray, bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
 
 
 
+// Make sure ray.dir is normalized and != 0
+// We return x but we can use other components as well
+// fn ray_t_from_pos(ray: Ray, pos: vec3<f32>) -> f32 {
+//     return abs(((pos - ray.orig) / ray.dir).x);
+// }
+fn ray_t_from_pos(ray: Ray, pos: vec3<f32>) -> f32 {
+    let d = abs(ray.dir);
+    if d.x >= d.y && d.x >= d.z {
+        return (pos.x - ray.orig.x) / ray.dir.x;
+    } else if d.y >= d.z {
+        return (pos.y - ray.orig.y) / ray.dir.y;
+    } else {
+        return (pos.z - ray.orig.z) / ray.dir.z;
+    }
+}
+
+
+
 fn ray_depth(ray: Ray) -> f32 {
     var max_depth = 1e30;
     var depth = 0.;
@@ -541,6 +585,10 @@ fn ray_depth(ray: Ray) -> f32 {
         
             let ty = curr_data & 3u;
             if ty == 1u { // Chunk, so we descend into it
+                // Check if chunk is too small and beam has low resolution, if so, early exit to hide graphical artifacts
+                if curr_depth > 2 && pc.beam_idx == 1u {
+                    break;
+                }
                 idx_stack[curr_depth - 1u] = chunk_idx;
                 parent_pos_stack[curr_depth] = parent_pos + vec3<i32>(
                     local_pos.x * child_size_i,
@@ -548,7 +596,7 @@ fn ray_depth(ray: Ray) -> f32 {
                     local_pos.z * child_size_i
                 );
                 curr_chunks[curr_chunks_len] = voxel_chunks[curr_data >> 2];
-                if ((curr_chunks[curr_chunks_len].inner[0]&bit_mask_for_chunk[0]) == 0u) && ((curr_chunks[curr_chunks_len].inner[1]&bit_mask_for_chunk[1]) == 0u) {
+                if ((curr_chunks[curr_chunks_len].inner[0]&bit_mask_for_chunk[0]) == 0u) && ((curr_chunks[curr_chunks_len].inner[1]&bit_mask_for_chunk[1]) == 0u) && false {
                 } else {
                     curr_chunks_len += 1u;
                     curr_depth += 1u;
@@ -580,20 +628,15 @@ fn ray_depth(ray: Ray) -> f32 {
         let eps = 1e-3 * S;
         posf += dir * (tStep + eps);
     }
-return ray_t_from_pos(ray, posf)-eps;
-// return ray_t_from_pos(ray, posf)-eps;
-    // return max_depth;
-}
-
-// Make sure ray.dir is normalized and != 0
-// We return x but we can use other components as well
-fn ray_t_from_pos(ray: Ray, pos: vec3<f32>) -> f32 {
-    return ((pos - ray.orig) / ray.dir).x;
+    return ray_t_from_pos(ray, posf)-eps;
 }
 
 
 
-fn compute(global_id: vec2<u32>) -> f32 {
+fn compute(global_id: vec2<u32>, prev_t: f32) -> f32 {
+    if prev_t == 1e30 {
+        return 1e30;
+    }
     let i = f32(global_id.x);
     let j = (1. - f32(global_id.y)/f32(cam.img_size.y)) * f32(cam.img_size.y);
     let lookfrom = cam.center;     // Point camera is looking from
@@ -630,16 +673,39 @@ fn compute(global_id: vec2<u32>) -> f32 {
     
     let pixel_center = pixel00_loc + ((i) * pixel_delta_u) + ((j) * pixel_delta_v);
     var orig = lookfrom;
-    let r = Ray(orig, normalize(pixel_center - lookfrom));
-    // while (true) {}
+    var r = Ray(orig, normalize(pixel_center - lookfrom));
+    r.orig = at(r, prev_t);
     return ray_depth(r);
 }
+struct PushConstants {
+    beam_idx: u32,
+}
+var<push_constant> pc: PushConstants;
+
 @compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let x = global_id.x*2;
-    let y = global_id.y*2;
-    if x >= cam.img_size.x || y >= cam.img_size.y {
-        return;
+    let scale = 2u << pc.beam_idx; // 4 (i=1), 2 (i=0)
+    let full_w = cam.img_size.x;
+    let half_w = full_w >> 1u;
+
+    // full-res coords processed by this invocation
+    let x = global_id.x * scale;
+    let y = global_id.y * scale;
+    if (x >= cam.img_size.x || y >= cam.img_size.y) { return; }
+
+    // map to half-res coords (what the final shader samples)
+    let hx = x >> 1u;
+    let hy = y >> 1u;
+
+    // read seed from previous pass (¼→½): previous writes live at even cells
+    var prev_t = 0.0;
+    if (pc.beam_idx == 0u) {
+        // current pass is ½-res; previous pass was ¼-res → even indices in half grid
+        let prev_idx = (hx & ~1u) + ((hy & ~1u) * half_w);
+        prev_t = max_depth[prev_idx];
     }
-    max_depth[global_id.x+global_id.y*(cam.img_size.x/2)] = compute(vec2<u32>(x, y));
+    let curr_idx = hx + hy * half_w;     // valid for both passes (¼ maps via hx/hy)
+
+    let delta_t = compute(vec2<u32>(x, y), prev_t);
+    max_depth[curr_idx] = prev_t + delta_t;   // <<< ACCUMULE
 }

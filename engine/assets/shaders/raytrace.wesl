@@ -1,5 +1,6 @@
 // #import bevy_sprite::{mesh2d_vertex_output::VertexOutput, mesh2d_view_bindings::globals}; 
-
+// import super::utils::*;
+// import super::raytrace_common::*;
 
 @group(0) @binding(0) var<storage, read_write> accumulated_tex: array<u32>;
 @group(0) @binding(1) var<uniform> cam: Camera;
@@ -12,9 +13,61 @@
 @group(0) @binding(8) var<storage, read> block_data3: array<MapData>;
 
 // @group(0) @binding(5) var base_sampler: sampler;
-include! utils.wgsl
-include! raytrace_common.wgsl
+// include! utils.wgsl
+// include! raytrace_common.wgsl
 
+
+#import super::utils::{
+    div_euclid_v3,
+    div_euclid,
+    div_euclid_f32,
+    div_euclid_f32_v3,
+    rem_euclid,
+    rem_euclid_v3,
+    degrees_to_radians,
+    near_zero,
+    reflect,
+    random_unit_vector,
+    random_on_hemisphere,
+    random_in_unit_disk,
+    xorshift_rand,
+    xorshift_randf32,
+    wang_hash,
+    rand_01_wang,
+    rand_01,
+    rand,
+    vec3_rand,
+    set_face_normal,
+    cmple,
+    cmple_to_unit,
+    cmple,
+    fastFloor,
+    count_bits_in_range,
+    branchless_dda,
+    chunk_depth_to_size,
+    depth_to_chunk_size,
+    root_chunk_size,
+    srgb_to_linear,
+    is_accumulating_frames,
+    size_to_array_array_idx,
+    array_array_idx_to_prefix_size,
+    get_block_data,
+    arrayLengthBlockData,
+    get_data_idx_in_chunk,
+    get_block_data_follow_tails,
+    valid_res,
+    count_ones,
+    at,
+    local_pos,
+    ivec3_local_pos,
+};
+#import super::raytrace_common::{
+    get_data_in_chunk,
+    hit_box_t,
+    ray_depth,
+    ray_t_from_pos,
+    INVALID_BOX_HIT,
+};
 
 // @group(2) @binding(100) var<uniform> cam.img_size: vec2<f32>;
 
@@ -60,22 +113,16 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
     res.rec.t = t;
     res.rec.front_face = false;
     // data = data%7;
-    let r= data & 0xFF;
-    let g= (data >> 8) & 0xFF;
-    let b= (data >> 16) & 0xFF;
-    let metallic = (data >> 24) & 1;
-    res.rec.color = vec3(f32(r)/255., f32(g)/255., f32(b)/255.);
-    // if data > 5 {
-    //     res.rec.color = vec3(f32(data) / 255., f32(data) / 255., f32(data) / 255.);
-    // } else {
-    //     let texcoord = vec2<u32>((uv + vec2(0.5)) * 32.0);
-    //     // let srgb = textureLoad(atlas, texcoord, data).xyz;
-    //     let srgb = (textureLoad(atlas, texcoord, data).xyz - vec3(0.5)) * 1.2 + vec3(0.5);
-    //     res.rec.color = srgb_to_linear(srgb);
-    //     if data==2 {
-    //         res.rec.color *= 4.;
-    //     }
-    // }
+    if data > 5 {
+        res.rec.color = vec3(0., f32(data) / 255., f32(data) / 255.);
+    } else {
+        let texcoord = vec2<u32>((uv + vec2(0.5)) * 32.0);
+        let srgb = textureLoad(atlas, texcoord, data).xyz;
+        res.rec.color = srgb_to_linear(srgb);
+        if data==2 {
+            res.rec.color *= 4.;
+        }
+    }
     return res;
 }
 fn hit(ray: Ray) -> HitRecordResult {
@@ -168,11 +215,7 @@ fn hit(ray: Ray) -> HitRecordResult {
                 curr_depth += 1u;
                 continue; // IMPORTANT: re-evaluate at new depth
             } else if ty == 2u { // Block
-                var res = hit_box_gen(ray, Box(vec3<f32>(posi), vec3<f32>(posi) + vec3(1.0), u32(curr_data>>2)));
-                // var c = vec3(1., 0., 0.);
-                
-                // return valid_res(c);
-                return res; // making posi = 0 and rb 10000 is fun
+                return hit_box_gen(ray, Box(vec3<f32>(posi), vec3<f32>(posi) + vec3(1.0), u32(curr_data>>2))); // making posi = 0 and rb 10000 is fun
             }
         }
         // Should be useless check but I like to keep it
@@ -200,105 +243,31 @@ fn hit(ray: Ray) -> HitRecordResult {
 
     return miss;
 }
-fn process_hit(ray: Ray, hit_result: HitRecordResult) -> HitRecordResult {
-    var res = hit_result;
-    
-    // Lambertian shading - use abs or negate ray direction
-    let lambert = max(0.0, dot(res.rec.normal, ray.dir));
-    res.rec.color *= lambert;
-    
-    // Distance-based fog (attenuate, don't add)
-    let fog_distance = 4000.0;
-    let fog_factor = exp(-distance(cam.center, res.rec.p) / fog_distance);
-    res.rec.color *= fog_factor;
-    
-    return res;
-}
-// Improved ray_color with better bounce handling
-fn ray_color(initial_ray: Ray) -> vec3<f32> {
-    var ray = initial_ray;
-    var accumulated_color = vec3(1.0);
-    var final_color = vec3(0.0);
-    let max_bounces = 5; // Increase for more realism
-    
-    for (var bounce = 0; bounce < max_bounces; bounce += 1) {
+fn ray_color(ray2: Ray) -> vec3<f32> {
+    var ray = ray2;
+
+    let a = 0.5 * (ray.dir.y + 1.0);
+    var c = (1.0 - a) * vec3(1.0, 1.0, 1.0) + a * vec3(0.5, 0.7, 1.0);
+
+    for (var i = 1; i < 3; i += 1) {
         var res = hit(ray);
-        
         if res.valid {
-            // Process the hit with proper shading
-            res = process_hit(ray, res);
-            // if (true) {return res.rec.color;}
-            
-            // Material type detection (you can make this data-driven)
-            let is_metallic = false; // Add material property to your hit record
-            let roughness = 0.5; // Control reflection sharpness
-            
-            var next_direction: vec3<f32>;
-            
-            if is_metallic {
-                // Metallic reflection
-                next_direction = reflect(ray.dir, res.rec.normal);
-                // Add roughness
-                next_direction += random_unit_vector() * roughness;
-                next_direction = normalize(next_direction);
-                
-                accumulated_color *= res.rec.color;
-            } else {
-                // Diffuse (Lambertian) scattering
-                next_direction = res.rec.normal + random_unit_vector();
-                
-                // Handle degenerate cases
-                if length(next_direction) < 0.001 {
-                    next_direction = res.rec.normal;
-                } else {
-                    next_direction = normalize(next_direction);
-                }
-                
-                // Energy conservation for diffuse materials
-                accumulated_color *= res.rec.color * 0.5;
+            if is_accumulating_frames() == false {
+            // if true {
+                return res.rec.color;
             }
-            
-            // Prepare next ray with small offset to avoid self-intersection
-            ray = Ray(res.rec.p + next_direction * 0.001, next_direction);
-            
-            // Russian roulette termination for efficiency (optional)
-            let survival_probability = max(accumulated_color.r, max(accumulated_color.g, accumulated_color.b));
-            if rand(0., 1.) > survival_probability && bounce > 2 {
-                break;
-            }
-            // if min(accumulated_color.r, min(accumulated_color.g, accumulated_color.b)) < 0.01 {
-            //     accumulated_color = vec3(1., 0., 0.);
-            //     break;
-            // }
-            accumulated_color /= survival_probability;
+            // var direction = res.rec.normal + random_unit_vector() * 0.5;
+            var direction = reflect(ray.dir, res.rec.normal) + random_unit_vector()*0.2;
+            if near_zero(direction) {direction = res.rec.normal;}
+            c *= res.rec.color;
+            ray = Ray(res.rec.p, direction);
         } else {
-            // Hit skybox
-            break;
+            return c;
         }
     }
-    if all(final_color == vec3(0.)) {
-        final_color = accumulated_color * skybox(ray.dir);
-    }
-    
-    // Apply tone mapping (Reinhard is more standard than your current approach)
-    return reinhard_tone_map(final_color);
-}
-
-// Better tone mapping function
-fn reinhard_tone_map(color: vec3<f32>) -> vec3<f32> {
-    // Extended Reinhard tone mapping
-    let white_point = 2.0;
-    let numerator = color * (1.0 + color / (white_point * white_point));
-    let denominator = 1.0 + color;
-    
-    // Apply gamma correction
-    return pow(numerator / denominator, vec3(1.0 / 2.2));
-}
-fn skybox(ray_dir: vec3<f32>) -> vec3<f32> {
-    let a = 0.5 * (ray_dir.y + 1.0);
-    var c = (1.0 - a) * vec3(1.0, 1.0, 1.0) + a * vec3(0.5, 0.7, 1.0);
     return c;
 }
+
 
 fn compute(global_id: vec2<u32>) {
     
@@ -346,8 +315,7 @@ fn compute(global_id: vec2<u32>) {
     var antialiasing = false;
     if samples_per_pixel > 1 {antialiasing = true;}
     var c = vec3(0.);
-    rng_seed = f32((u32(f32(cam.accum_frames)*1000./3.))&(0xFF)) + (f32(global_id.x) + f32(global_id.y) * 10.);
-    rng_seed *= f32(global_id.x) + rand(0., 1.)+f32(cam.center.x)+f32(cam.direction.x);
+    rng_seed = f32((u32(f32(cam.accum_frames)))&(0xFF)) + (f32(global_id.x) + f32(global_id.y) * 10.);
     for (var s = 0; s < samples_per_pixel; s++) {
         var offset = vec3(0.);
         if samples_per_pixel > 1 {
@@ -362,14 +330,7 @@ fn compute(global_id: vec2<u32>) {
             orig += (p.x * defocus_disk_u) + (p.y * defocus_disk_v);
         }
         var r = Ray(orig, normalize(pixel_center - lookfrom));
-        let depth_x = global_id.x / 2u;
-        let depth_y = global_id.y / 2u;
-        let depth_idx = depth_x + depth_y * (cam.img_size.x/2);
-        let prev_t = max_depth[depth_idx];
-        // if prev_t == 1e30 {return;}
-        r.orig = at(r, prev_t);
-        
-        // r.orig = at(r, max_depth[global_id.x/2+global_id.y/2*(cam.img_size.x/2)]);
+        r.orig = at(r, max_depth[global_id.x/2+global_id.y/2*(cam.img_size.x/2)]);
         c += ray_color(r) / f32(samples_per_pixel);
     }
     
@@ -386,21 +347,14 @@ fn compute(global_id: vec2<u32>) {
     // out.b = u32(u32(cam.accum_frames));
     // var out = vec4(0, 0, 0, 255u);
     // var out = vec4(global_id, 255u);
-    if max(out.r, max(out.g, out.b)) > 255u {
-        let m = max(out.r, max(out.g, out.b));
-        // out = out * (255u / m);
-        out = vec4(1u);
-    }
     out.r = min(out.r, 255u);
     out.g = min(out.g, 255u);
     out.b = min(out.b, 255u);
     out.a = min(out.a, 255u);
-    let idx = global_id.x+global_id.y*(cam.img_size.x);
-    let prev = accumulated_tex[idx];
-    // out = u32(max_depth[idx]);
+    let prev = accumulated_tex[global_id.x+global_id.y*(cam.img_size.x)];
     let prev_v= vec4(prev&0xffu, (prev>>8u)&0xffu,  (prev>>16u)&0xffu,  (prev>>24u)&0xffu);
     out = (prev_v*cam.accum_frames + out) / (cam.accum_frames + 1);
-    accumulated_tex[idx] = (out.r) | ((out.g) << 8u) | ((out.b) << 16u) | ((out.a) << 24u);
+    accumulated_tex[global_id.x+global_id.y*(cam.img_size.x)] = (out.r) | ((out.g) << 8u) | ((out.b) << 16u) | ((out.a) << 24u);
     // accumulated_tex[global_id.x+global_id.y*(cam.img_size.x)] = cam.accum_frames;
     if cam.accum_frames%2==0 {
     // out = (textureLoad(accumulated_img, texcoord) * f32(cam.accum_frames) + out) / f32(cam.accum_frames + 1);

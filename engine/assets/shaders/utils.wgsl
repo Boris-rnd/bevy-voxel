@@ -77,41 +77,67 @@ fn random_in_unit_disk() -> vec3<f32> {
     }
     return vec3(0.);
 }
+var<private> rng_state: u32;
 
-fn xorshift_rand(seed: u32) -> u32 {
-    var rand = seed ^ (seed << 13);
-    rand = rand >> 17;
-    rand = rand << 5;
-    return rand;
+// Initialize RNG state based on pixel coordinates and frame number
+fn init_rng(pixel: vec2<u32>, frame: u32) {
+    // Combine pixel coordinates and frame into a unique seed
+    rng_state = wang_hash(pixel.x + wang_hash(pixel.y + wang_hash(frame)));
 }
-fn xorshift_randf32(seed: f32) -> f32 {
-    return f32(xorshift_rand(u32(seed)));
+
+// Improved Wang hash function
+fn wang_hash(seed: u32) -> u32 {
+    var s = seed;
+    s = (s ^ 61u) ^ (s >> 16u);
+    s = s + (s << 3u);
+    s = s ^ (s >> 4u);
+    s = s * 0x27d4eb2du;
+    s = s ^ (s >> 15u);
+    return s;
 }
-fn wang_hash(u: u32) -> u32 {
-    var x = u;
-    x = (x ^ 61u) ^ (x >> 16u);
-    x = x * 9u;
-    x = x ^ (x >> 4u);
-    x = x * 0x27d4eb2du;
-    x = x ^ (x >> 15u);
+
+// PCG random number generator (high quality, fast)
+fn pcg_random() -> u32 {
+    let oldstate = rng_state;
+    rng_state = oldstate * 747796405u + 2891336453u;
+    let word = ((oldstate >> ((oldstate >> 28u) + 4u)) ^ oldstate) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+// Xorshift32 (corrected implementation)
+fn xorshift32() -> u32 {
+    var x = rng_state;
+    x ^= x << 13u;
+    x ^= x >> 17u;
+    x ^= x << 5u;
+    rng_state = x;
     return x;
 }
 
-fn rand_01_wang() -> f32 {
-    let u = bitcast<u32>(rng_seed);
-    let h = wang_hash(u);
-    let r = f32(h) / 4294967296.0; // 2^32;
-    rng_seed = r;
-    return r;
+// Main random float function [0, 1)
+fn random_f32() -> f32 {
+    return f32(pcg_random()) * (1.0 / 4294967296.0);
 }
 
-fn rand_01() -> f32 {
-    let r = abs(fract(sin(xorshift_randf32((sin(rng_seed / 3.3) * 43758.5453)))));
-    rng_seed = r;
-    return r;
+// Alternative using bitcast for better distribution
+fn random_f32_uniform() -> f32 {
+    let bits = pcg_random();
+    let float_bits = (bits >> 9u) | 0x3f800000u; // [1.0, 2.0)
+    return bitcast<f32>(float_bits) - 1.0;
 }
+
+// Random float in range [min, max)
 fn rand(min: f32, max: f32) -> f32 {
-    return min + rand_01_wang() * (max - min);
+    return min + random_f32() * (max - min);
+}
+
+// Box-Muller transform for normal distribution (useful for blur effects)
+fn random_gaussian() -> vec2<f32> {
+    let u1 = max(0.00001, random_f32()); // Avoid log(0)
+    let u2 = random_f32();
+    let r = sqrt(-2.0 * log(u1));
+    let theta = 2.0 * 3.14159265359 * u2;
+    return vec2<f32>(r * cos(theta), r * sin(theta));
 }
 fn vec3_rand(min: f32, max: f32) -> vec3<f32> {
     return vec3(rand(min, max), rand(min, max), rand(min, max));
@@ -212,7 +238,7 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 }
 
 fn is_accumulating_frames() -> bool {
-    return cam.accum_frames > 1;
+    return cam.accum_frames > 20;
 }
 
 struct MapDataID {

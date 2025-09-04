@@ -1,13 +1,71 @@
-@group(0) @binding(0) var<storage, read_write> max_depth: array<f32>;
-@group(0) @binding(1) var<uniform> cam: Camera;
-@group(0) @binding(2) var<storage, read> voxel_chunks: array<VoxelChunk>;
-@group(0) @binding(3) var<storage, read> block_data0: array<MapData>;
-@group(0) @binding(4) var<storage, read> block_data1: array<MapData>;
-@group(0) @binding(5) var<storage, read> block_data2: array<MapData>;
-@group(0) @binding(6) var<storage, read> block_data3: array<MapData>;
 
-include! utils.wgsl
-include! raytrace_common.wgsl
+// #ifdef _CHUNK_SIZE
+//     const CHUNK_SIZE: u32 = _CHUNK_SIZE;
+// #endif
+const CHUNK_U32_COUNT = CHUNK_SIZE*CHUNK_SIZE*CHUNK_SIZE/32;
+// const CHUNK_U32_COUNT = 1;
+const CHUNK_SIZE: u32 = #{_CHUNK_SIZE};
+const CHUNK_MASK = CHUNK_SIZE - 1u;
+const CHUNK_SHIFT = countOneBits(CHUNK_MASK);
+
+struct DataResult {
+    data: u32,
+    depth: u32,
+}
+/// Returns root chunk data if not found
+/// max depth starts at 1
+/// Returns block_data, so also has the ty in first 2 bits
+// fn get_data_in_chunk(pos: vec3<i32>, chk: VoxelChunk, par_pos: vec3<i32>, dep: u32, max_depth: u32) -> DataResult {
+//     // if pos.x==1 {return u32(1);}
+//     // else {return u32(4294967295);} 
+//     var chunk = chk;
+//     var local_pos = vec3<i32>(0);
+//     var parent_pos = par_pos;
+//     var end_depth = dep;
+//     var curr_data = 1u; // Root chunk
+//     var prev_idx = 0u;
+//     for (var depth = dep; depth <= max_depth; depth++) {
+//         end_depth = depth;
+//         let chunk_size = i32(depth_to_chunk_size(depth-1));
+//         parent_pos += ((vec3<i32>(vec3(prev_idx & 3, (prev_idx >> 2) & 3, (prev_idx >> 4) & 3))) * chunk_size);
+//         local_pos = div_euclid_v3(pos - parent_pos, vec3<i32>(chunk_size >> 2));
+//         if any(local_pos >= vec3(4) || local_pos < vec3(0)) {return DataResult(0, 0);}
+//         var idx = u32(local_pos.x) + (u32(local_pos.y) << CHUNK_SHIFT) + u32((local_pos.z) << (CHUNK_SHIFT*2));
+//         prev_idx = idx;
+
+//         let map_data_idx = get_data_idx_in_chunk(chunk, idx);
+//         if u32(map_data_idx) > arrayLength(&block_data) { // Also takes into account if map_data_idx == 4294967295u {break;}
+//             break; // Out of bounds
+//         }
+//         curr_data = block_data[map_data_idx].data;
+//         let ty = curr_data & 3;
+//         if ty == 2 { // Block
+//             return DataResult(curr_data, u32(depth)); // Return texture id
+//         } else if ty == 1 { // Chunk
+//             // return set_bits; // Return texture id
+//             chunk = voxel_chunks[curr_data >> 2];
+//         } else { // Error
+//             // return u32(4294967295); // u32::MAX
+//             break;
+//         }
+//     }
+//     // Returns root chunk if nothing found or latest chunk
+//     return DataResult(curr_data, u32(end_depth));
+// }
+
+const INVALID_BOX_HIT: f32 = 3*10e10;
+fn hit_box_t(ray: Ray, bmin: vec3<f32>, bmax: vec3<f32>) -> f32 {
+    let t135 = (bmax - ray.orig) / ray.dir;
+    let t246 = (bmin - ray.orig) / ray.dir;
+
+    let tmin = max(max(min(t135.x, t246.x), min(t135.y, t246.y)), min(t135.z, t246.z));
+    let tmax = min(min(max(t135.x, t246.x), max(t135.y, t246.y)), max(t135.z, t246.z));
+
+    if tmin > tmax || tmax < 0 {
+        return INVALID_BOX_HIT;
+    }
+    return tmin;
+}
 
 
 
@@ -85,10 +143,6 @@ fn ray_depth(ray: Ray) -> f32 {
         
             let ty = curr_data & 3u;
             if ty == 1u { // Chunk, so we descend into it
-                // Check if chunk is too small and beam has low resolution, if so, early exit to hide graphical artifacts
-                if curr_depth > 2 && pc.beam_idx == 1u {
-                    break;
-                }
                 idx_stack[curr_depth - 1u] = chunk_idx;
                 parent_pos_stack[curr_depth] = parent_pos + vec3<i32>(
                     local_pos.x * child_size_i,
@@ -96,7 +150,7 @@ fn ray_depth(ray: Ray) -> f32 {
                     local_pos.z * child_size_i
                 );
                 curr_chunks[curr_chunks_len] = voxel_chunks[curr_data >> 2];
-                if ((curr_chunks[curr_chunks_len].inner[0]&bit_mask_for_chunk[0]) == 0u) && ((curr_chunks[curr_chunks_len].inner[1]&bit_mask_for_chunk[1]) == 0u) && false {
+                if ((curr_chunks[curr_chunks_len].inner[0]&bit_mask_for_chunk[0]) == 0u) && ((curr_chunks[curr_chunks_len].inner[1]&bit_mask_for_chunk[1]) == 0u) {
                 } else {
                     curr_chunks_len += 1u;
                     curr_depth += 1u;
@@ -128,84 +182,13 @@ fn ray_depth(ray: Ray) -> f32 {
         let eps = 1e-3 * S;
         posf += dir * (tStep + eps);
     }
-    return ray_t_from_pos(ray, posf)-eps;
+return ray_t_from_pos(ray, posf)-eps;
+// return ray_t_from_pos(ray, posf)-eps;
+    // return max_depth;
 }
 
-
-
-fn compute(global_id: vec2<u32>, prev_t: f32) -> f32 {
-    if prev_t == 1e30 {
-        return 1e30;
-    }
-    let i = f32(global_id.x);
-    let j = (1. - f32(global_id.y)/f32(cam.img_size.y)) * f32(cam.img_size.y);
-    let lookfrom = cam.center;     // Point camera is looking from
-    let lookat = cam.center + cam.direction;// Point camera is looking at
-    let vup = vec3(0., 1., 0.); // Camera-relative "up" direction
-    let defocus_angle = 5.;
-
-    let vfov = cam.fov;
-
-    let focal_length = 3.;
-    let theta = degrees_to_radians(vfov);
-    let h = tan(theta / 2);
-    let viewport_height = 2. * h * focal_length;
-    let viewport_width = viewport_height * (f32(cam.img_size.x) / f32(cam.img_size.y));
-
-    let w = normalize(lookfrom - lookat);
-    let u = normalize(cross(vup, w));
-    let v = cross(w, u);
-
-    let viewport_u = viewport_width * u; // Vector across viewport horizontal edge
-    let viewport_v = viewport_height * (v); // Vector down viewport vertical edge
-    
-    // Calculate the horizontal and vertical delta vectors from pixel to pixel.
-    let pixel_delta_u = viewport_u / f32(cam.img_size.x);
-    let pixel_delta_v = viewport_v / f32(cam.img_size.y);
-
-    // Calculate the location of the upper left pixel.
-    let viewport_upper_left = lookfrom - focal_length * w - viewport_u / 2 - viewport_v / 2;
-    let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
-
-
-
-    rng_seed = f32((u32(f32(cam.accum_frames)))&(0xFF)) + (f32(global_id.x) + f32(global_id.y) * 10.);
-    
-    let pixel_center = pixel00_loc + ((i) * pixel_delta_u) + ((j) * pixel_delta_v);
-    var orig = lookfrom;
-    var r = Ray(orig, normalize(pixel_center - lookfrom));
-    r.orig = at(r, prev_t);
-    return ray_depth(r);
-}
-struct PushConstants {
-    beam_idx: u32,
-}
-var<push_constant> pc: PushConstants;
-
-@compute @workgroup_size(8, 8, 1)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let scale = 2u << pc.beam_idx; // 4 (i=1), 2 (i=0)
-    let full_w = cam.img_size.x;
-    let half_w = full_w >> 1u;
-
-    // full-res coords processed by this invocation
-    let x = global_id.x * scale;
-    let y = global_id.y * scale;
-    if (x >= cam.img_size.x || y >= cam.img_size.y) { return; }
-
-    // map to half-res coords (what the final shader samples)
-    let hx = x >> 1u;
-    let hy = y >> 1u;
-
-    // read seed from previous pass (¼→½): previous writes live at even cells
-    var prev_t = 0.0;
-    if (pc.beam_idx == 0u) {
-        // current pass is ½-res; previous pass was ¼-res → even indices in half grid
-        let prev_idx = (hx & ~1u) + ((hy & ~1u) * half_w);
-        prev_t = max_depth[prev_idx];
-    }
-    let curr_idx = hx + hy * half_w;     // valid for both passes (¼ maps via hx/hy)
-
-    let delta_t = compute(vec2<u32>(x, y), prev_t);
-    max_depth[curr_idx] = prev_t + delta_t;   // <<< ACCUMULE
+// Make sure ray.dir is normalized and != 0
+// We return x but we can use other components as well
+fn ray_t_from_pos(ray: Ray, pos: vec3<f32>) -> f32 {
+    return ((pos - ray.orig) / ray.dir).x;
 }

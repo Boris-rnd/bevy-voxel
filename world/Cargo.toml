@@ -11,6 +11,7 @@ log = {workspace = true}
 rand = {workspace = true}
 divan = "0.1.21"
 dhat = "*"
+dot_vox = "5.1.1"
 
 
 [features]

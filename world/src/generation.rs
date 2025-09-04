@@ -62,7 +62,7 @@ fn gen_chunk(
                 write_small_chunk(
                     &mut blks_mask,
                     &mut map_data,
-                    ivec3(x, height-world_pos.y, z).to_local_pos(),
+                    ivec3(x, height-world_pos.y, z).to_local_pos().unwrap(),
                     data,
                 );
             }
@@ -75,7 +75,7 @@ fn gen_chunk(
                 write_small_chunk(
                     &mut blks_mask,
                     &mut map_data,
-                    ivec3(x, i, z).to_local_pos(),
+                    ivec3(x, i, z).to_local_pos().unwrap(),
                     data,
                 );
             }

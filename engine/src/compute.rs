@@ -456,7 +456,12 @@ impl FromWorld for BeamComputePipeline {
         let pipeline = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
             label: Some("Beam optimizer".into()),
             layout: vec![layout.clone()],
-            push_constant_ranges: Vec::new(),
+            push_constant_ranges: vec![
+                PushConstantRange {
+                    stages: ShaderStages::COMPUTE,
+                    range: 0..std::mem::size_of::<u32>() as u32,
+                }
+            ],
             shader: shader.clone(),
             shader_defs: vec![ShaderDefVal::UInt("_CHUNK_SIZE".to_string(), CHUNK_SIZE as u32)],
             entry_point: "main".into(),
@@ -479,6 +484,7 @@ impl render_graph::Node for BeamComputeNode {
         _graph: &mut render_graph::RenderGraphContext,
         render_context: &mut RenderContext,
         world: &World,
+
     ) -> Result<(), render_graph::NodeRunError> {
         if world.get_resource::<FragCamera>().is_none() {
             info!("Couldn't get frag camera, skipping compute pass.");
@@ -489,24 +495,26 @@ impl render_graph::Node for BeamComputeNode {
         let bind_group = world.resource::<BeamGpuBufferBindGroup>();
         let camera = world.resource::<FragCamera>();
 
-
         if let Some(init_pipeline) = pipeline_cache.get_compute_pipeline(pipeline.pipeline) {
-            let mut pass =
-                render_context
+            // Two passes: i=1 (1/4 resolution), i=0 (1/2 resolution)
+            for i in (0..=1u32).rev() {
+                let mut pass = render_context
                     .command_encoder()
                     .begin_compute_pass(&ComputePassDescriptor {
                         label: Some("Beam optimizer"),
                         ..default()
                     });
 
-            pass.set_bind_group(0, &bind_group.0, &[]);
-            pass.set_pipeline(init_pipeline);
-            pass.dispatch_workgroups(
-                (camera.img_dims.x + 16 - 1) / 16,
-                (camera.img_dims.y + 16 - 1) / 16,
-                1,
-            );
+                pass.set_bind_group(0, &bind_group.0, &[]);
+                pass.set_pipeline(init_pipeline);
+                pass.set_push_constants(0, &i.to_le_bytes());
+                let scale = 2u32 << i;
+                let wg_x = (camera.img_dims.x / scale + 7) / 8;
+                let wg_y = (camera.img_dims.y / scale + 7) / 8;
+                pass.dispatch_workgroups(wg_x, wg_y, 1);
+            }
         }
         Ok(())
     }
 }
+
