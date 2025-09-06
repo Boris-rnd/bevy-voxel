@@ -59,8 +59,9 @@ fn ray_depth(ray: Ray) -> f32 {
         let posi = vec3<i32>(posf);
         let parent_pos = parent_pos_stack[curr_depth - 1u];
         // Get chunk's child size as integer
-        let child_size_i = i32(depth_to_chunk_size(curr_depth));
+        var child_size_i = i32(depth_to_chunk_size(curr_depth));
         let local_pos = div_euclid_v3(posi - parent_pos, vec3(child_size_i));
+        
         if any((posi - parent_pos)<vec3(0)) || any(local_pos >= vec3(i32(CHUNK_SIZE))) {
             // Outside of previous chunk, if curr_depth==1, then outside of root chunk so won't hit anything else
             if curr_depth == 1u { 
@@ -111,7 +112,10 @@ fn ray_depth(ray: Ray) -> f32 {
         // if map_data_idx.array_array_idx != 4294967295u {
         //     return valid_res(vec3(0., 1., 1.));
         // }
-        let S = f32(child_size_i);
+        var S = f32(child_size_i);
+        if distance(ray.orig, posf)>1000 {
+            S *= 2;
+        }
         let world_pos_in_parent = posf - vec3<f32>(parent_pos);
 
         // handle zeros

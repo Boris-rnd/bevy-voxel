@@ -129,14 +129,15 @@ fn random_f32() -> f32 {
 
 // Alternative using bitcast for better distribution
 fn random_f32_uniform() -> f32 {
-    let bits = pcg_random();
+    let bits = wang_hash(rng_state);
+    rng_state = xorshift32();
     let float_bits = (bits >> 9u) | 0x3f800000u; // [1.0, 2.0)
     return bitcast<f32>(float_bits) - 1.0;
 }
 
 // Random float in range [min, max)
 fn rand(min: f32, max: f32) -> f32 {
-    return min + random_f32() * (max - min);
+    return min + random_f32_uniform() * (max - min);
 }
 
 // Box-Muller transform for normal distribution (useful for blur effects)
@@ -153,9 +154,9 @@ fn vec3_rand(min: f32, max: f32) -> vec3<f32> {
 
 fn set_face_normal(ray: Ray, outward_normal: vec3<f32>, r: HitRecord) -> HitRecord {
     var rec = r;
-    rec.front_face = dot(ray.dir, outward_normal) < 0;
+    let front_face = dot(ray.dir, outward_normal) < 0;
     rec.normal = outward_normal;
-    if !rec.front_face {
+    if !front_face {
         rec.normal = -outward_normal;
     }
     return rec;
@@ -338,9 +339,6 @@ fn get_block_data_follow_tails(idx: MapDataID) -> u32 {
     return 4294967295u;
 }
 
-fn valid_res(color: vec3<f32>) -> HitRecordResult {
-    return HitRecordResult(true, HitRecord(vec3(0.), vec3(0.), 0., false, color));
-}
 
 fn count_ones(n: u32) -> u32 {
     var count = 0u;
@@ -374,7 +372,7 @@ struct Ray {
     dir: vec3<f32>,
 }
 struct VoxelChunk {
-    idx_in_parent: u32,
+    // idx_in_parent: u32,
     inner: array<u32, CHUNK_U32_COUNT>,
     prefix_in_block_data_array: array<u32, 4>,
 }
@@ -382,14 +380,19 @@ struct Voxel {
     pos: vec3<f32>,
     texture_id: u32,
 }
+// If t==1e30, then hit record is invalid
 struct HitRecord {
     p: vec3<f32>,
     normal: vec3<f32>,
     t: f32,
-    front_face: bool,
     color: vec3<f32>,
 }
-
+fn valid_rec(color: vec3<f32>) -> HitRecord {
+    return HitRecord(vec3(0.), vec3(0.), 0., color);
+}
+fn invalid_rec() -> HitRecord {
+    return HitRecord(vec3(0.), vec3(0.), 1e30, vec3(0.));
+}
 
 struct MapData {
     // 2 first bits = type:
@@ -408,20 +411,16 @@ struct Box {
 }
 
 
-fn local_pos(chunk: VoxelChunk) -> u32 {
-    // Returns the local position of the chunk in the world
-    return chunk.idx_in_parent;
-}
+// fn local_pos(chunk: VoxelChunk) -> u32 {
+//     // Returns the local position of the chunk in the world
+//     return chunk.idx_in_parent;
+// }
 // fn ivec3_local_pos(chunk: VoxelChunk) -> vec3<i32> {
 //     // Returns the local position of the chunk in the world as an ivec3
 //     return vec3<i32>(vec3(chunk.idx_in_parent % 4, (chunk.idx_in_parent / 4) % 4, (chunk.idx_in_parent / 16) % 4));
 // }
 
 // No tuples
-struct HitRecordResult {
-    valid: bool,
-    rec: HitRecord
-}
 
 // #ifdef _CHUNK_SIZE
 //     const CHUNK_SIZE: u32 = _CHUNK_SIZE;
@@ -559,8 +558,9 @@ fn ray_depth(ray: Ray) -> f32 {
         let posi = vec3<i32>(posf);
         let parent_pos = parent_pos_stack[curr_depth - 1u];
         // Get chunk's child size as integer
-        let child_size_i = i32(depth_to_chunk_size(curr_depth));
+        var child_size_i = i32(depth_to_chunk_size(curr_depth));
         let local_pos = div_euclid_v3(posi - parent_pos, vec3(child_size_i));
+        
         if any((posi - parent_pos)<vec3(0)) || any(local_pos >= vec3(i32(CHUNK_SIZE))) {
             // Outside of previous chunk, if curr_depth==1, then outside of root chunk so won't hit anything else
             if curr_depth == 1u { 
@@ -611,7 +611,10 @@ fn ray_depth(ray: Ray) -> f32 {
         // if map_data_idx.array_array_idx != 4294967295u {
         //     return valid_res(vec3(0., 1., 1.));
         // }
-        let S = f32(child_size_i);
+        var S = f32(child_size_i);
+        if distance(ray.orig, posf)>1000 {
+            S *= 2;
+        }
         let world_pos_in_parent = posf - vec3<f32>(parent_pos);
 
         // handle zeros

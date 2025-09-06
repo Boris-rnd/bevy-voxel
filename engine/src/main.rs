@@ -36,7 +36,7 @@ pub use material::*;
 
 fn main() {
     // let world = gen_world();
-    let world = load_world("/run/media/sxmourai/Dev/Projets/Initerse/bevy_voxel/engine/assets/world/Church_Of_St_Sophia.vox").unwrap();
+    let world = load_world("/run/media/sxmourai/Dev/Projets/Initerse/bevy_voxel/engine/assets/world/nuke.vox").unwrap();
     let root_max_depth = world.root_max_depth();
     let mut app = App::new();
     app

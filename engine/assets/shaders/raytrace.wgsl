@@ -19,17 +19,17 @@ include! raytrace_common.wgsl
 // @group(2) @binding(100) var<uniform> cam.img_size: vec2<f32>;
 
 
-fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
-    var res = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
+fn hit_box_gen(ray: Ray, box: Box) -> HitRecord {
+    var res = invalid_rec();
 
     var t = hit_box_t(ray, box.min, box.max);
     if t == INVALID_BOX_HIT {
         return res; // No hit
     }
-    res.valid = true;
-    res.rec.p = at(ray, t);
+    res.t = t;
+    res.p = at(ray, t);
     let center = (box.min + box.max) / 2.;
-    var circle_normal = center - res.rec.p;
+    var circle_normal = center - res.p;
 
     var uv: vec2<f32>;
     var data: u32 = box.texture_id;
@@ -56,30 +56,29 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecordResult {
     } else {
         circle_normal = vec3(1., 1.5, 1.);
     }
-    res.rec.normal = circle_normal;
-    res.rec.t = t;
-    res.rec.front_face = false;
+    res.normal = circle_normal;
+    res.t = t;
     // data = data%7;
     let r= data & 0xFF;
     let g= (data >> 8) & 0xFF;
     let b= (data >> 16) & 0xFF;
     let metallic = (data >> 24) & 1;
-    res.rec.color = vec3(f32(r)/255., f32(g)/255., f32(b)/255.);
+    res.color = vec3(f32(r)/255., f32(g)/255., f32(b)/255.);
     // if data > 5 {
-    //     res.rec.color = vec3(f32(data) / 255., f32(data) / 255., f32(data) / 255.);
+    //     res.color = vec3(f32(data) / 255., f32(data) / 255., f32(data) / 255.);
     // } else {
     //     let texcoord = vec2<u32>((uv + vec2(0.5)) * 32.0);
     //     // let srgb = textureLoad(atlas, texcoord, data).xyz;
     //     let srgb = (textureLoad(atlas, texcoord, data).xyz - vec3(0.5)) * 1.2 + vec3(0.5);
-    //     res.rec.color = srgb_to_linear(srgb);
+    //     res.color = srgb_to_linear(srgb);
     //     if data==2 {
-    //         res.rec.color *= 4.;
+    //         res.color *= 4.;
     //     }
     // }
     return res;
 }
-fn hit(ray: Ray) -> HitRecordResult {
-    var miss = HitRecordResult(false, HitRecord(vec3(0.), vec3(0.), 0., false, vec3(0.)));
+fn hit(ray: Ray) -> HitRecord {
+    var miss = invalid_rec();
 
     let root = voxel_chunks[0];
     let world_min = vec3<f32>(0.0);
@@ -99,6 +98,7 @@ fn hit(ray: Ray) -> HitRecordResult {
 
     let dir = ray.dir;
     let rcp = (1.0 / dir);
+    // Could use rcp but doesn't fix any graphical glitches
     let stepf = sign(dir); // select(vec3(-1.0), vec3(1.0), ray.dir > vec3(0.0))
     let step = vec3<i32>(stepf);        // for index stepping
 
@@ -123,7 +123,8 @@ fn hit(ray: Ray) -> HitRecordResult {
         max_iter = 1000;
     }
     var bit_mask_for_chunk = array<u32, 2>();
-    for (var iter = 0; iter < max_iter; iter = iter + 1) {
+    var iter = 0;
+    for (; iter < max_iter; iter = iter + 1) {
         // Query world at current integer voxel position
         let posi = vec3<i32>(posf);
         let parent_pos = parent_pos_stack[curr_depth - 1u];
@@ -148,7 +149,7 @@ fn hit(ray: Ray) -> HitRecordResult {
         if map_data_idx.array_idx < arrayLengthBlockData(map_data_idx.array_array_idx) {
             let curr_data = get_block_data_follow_tails(map_data_idx);
             if curr_data == 4294967295u { // Never happens but maybe one day i'll introduce a breaking bug
-                return valid_res(vec3(1., 0., 1.));
+                return valid_rec(vec3(1., 0., 1.));
             }
             // let curr_data = get_block_data(MapDataID(map_data_idx.array_array_idx, map_data_idx.array_idx)).data;
         
@@ -170,15 +171,15 @@ fn hit(ray: Ray) -> HitRecordResult {
             } else if ty == 2u { // Block
                 var res = hit_box_gen(ray, Box(vec3<f32>(posi), vec3<f32>(posi) + vec3(1.0), u32(curr_data>>2)));
                 // var c = vec3(1., 0., 0.);
-                
-                // return valid_res(c);
+                // break;
+                // return valid_rec(c);
                 return res; // making posi = 0 and rb 10000 is fun
             }
         }
         // Should be useless check but I like to keep it
         // Check if we have found something
         // if map_data_idx.array_array_idx != 4294967295u {
-        //     return valid_res(vec3(0., 1., 1.));
+        //     return valid_rec(vec3(0., 1., 1.));
         // }
         let S = f32(child_size_i);
         let world_pos_in_parent = posf - vec3<f32>(parent_pos);
@@ -190,27 +191,28 @@ fn hit(ray: Ray) -> HitRecordResult {
         var tMax = (next - world_pos_in_parent) * rcp;
         let tStep = min(tMax.x, min(tMax.y, tMax.z));
         // if !(tStep < inf) { 
-        //     return valid_res(vec3(1., 0., 1.));
+        //     return valid_rec(vec3(1., 0., 1.));
         //  }
 
         // nudge with scale-aware epsilon
-        let eps = 1e-3 * S;
+        let eps = 1e-2 * S;
         posf += dir * (tStep + eps);
     }
-
-    return miss;
+    return valid_rec(vec3(0., 0., f32(iter)/500.));
+    // return miss;
 }
-fn process_hit(ray: Ray, hit_result: HitRecordResult) -> HitRecordResult {
+fn process_hit(ray: Ray, hit_result: HitRecord) -> HitRecord {
     var res = hit_result;
     
     // Lambertian shading - use abs or negate ray direction
-    let lambert = max(0.0, dot(res.rec.normal, ray.dir));
-    res.rec.color *= lambert;
+    let lambert = max(0.0, dot(res.normal, ray.dir));
+    res.color *= lambert;
     
     // Distance-based fog (attenuate, don't add)
     let fog_distance = 4000.0;
-    let fog_factor = exp(-distance(cam.center, res.rec.p) / fog_distance);
-    res.rec.color *= fog_factor;
+    let fog_factor = min(max(0.01, exp(1.-distance(cam.center, res.p) / fog_distance)), 1.);
+    res.color *= fog_factor;
+
     
     return res;
 }
@@ -224,10 +226,12 @@ fn ray_color(initial_ray: Ray) -> vec3<f32> {
     for (var bounce = 0; bounce < max_bounces; bounce += 1) {
         var res = hit(ray);
         
-        if res.valid {
+        if res.t != 1e30 {
             // Process the hit with proper shading
             res = process_hit(ray, res);
-            // if (true) {return res.rec.color;}
+            if !is_accumulating_frames() {
+                return res.color;
+            }
             
             // Material type detection (you can make this data-driven)
             let is_metallic = false; // Add material property to your hit record
@@ -237,33 +241,33 @@ fn ray_color(initial_ray: Ray) -> vec3<f32> {
             
             if is_metallic {
                 // Metallic reflection
-                next_direction = reflect(ray.dir, res.rec.normal);
+                next_direction = reflect(ray.dir, res.normal);
                 // Add roughness
                 next_direction += random_unit_vector() * roughness;
                 next_direction = normalize(next_direction);
                 
-                accumulated_color *= res.rec.color;
+                accumulated_color *= res.color;
             } else {
                 // Diffuse (Lambertian) scattering
-                next_direction = res.rec.normal + random_unit_vector();
+                next_direction = res.normal + random_unit_vector();
                 
                 // Handle degenerate cases
                 if length(next_direction) < 0.001 {
-                    next_direction = res.rec.normal;
+                    next_direction = res.normal;
                 } else {
                     next_direction = normalize(next_direction);
                 }
                 
                 // Energy conservation for diffuse materials
-                accumulated_color *= res.rec.color * 0.5;
+                accumulated_color *= res.color * 0.5;
             }
             
             // Prepare next ray with small offset to avoid self-intersection
-            ray = Ray(res.rec.p + next_direction * 0.001, next_direction);
+            ray = Ray(res.p + next_direction * 0.001, next_direction);
             
             // Russian roulette termination for efficiency (optional)
             let survival_probability = max(accumulated_color.r, max(accumulated_color.g, accumulated_color.b));
-            if rand(0., 1.) > survival_probability && bounce > 2 {
+            if rand(0., 2) > survival_probability && bounce > (max_bounces/2) {
                 break;
             }
             // if min(accumulated_color.r, min(accumulated_color.g, accumulated_color.b)) < 0.01 {
@@ -346,8 +350,10 @@ fn compute(global_id: vec2<u32>) {
     var antialiasing = false;
     if samples_per_pixel > 1 {antialiasing = true;}
     var c = vec3(0.);
-    rng_seed = f32((u32(f32(cam.accum_frames)*1000./3.))&(0xFF)) + (f32(global_id.x) + f32(global_id.y) * 10.);
-    rng_seed *= f32(global_id.x) + rand(0., 1.)+f32(cam.center.x)+f32(cam.direction.x);
+    
+    rng_state = u32((((cam.accum_frames*1301348925*u32(429258578533.*sin(f32(cam.accum_frames)/100.))))&0xFF) + global_id.x + global_id.y*cam.img_size.x);
+    rng_state += u32((abs(cam.center.x*10000000.+cam.center.y*1000000000.+cam.center.z*10000000.))%14982428);
+    rng_state += u32((abs(cam.direction.x*100000.+cam.direction.y*1000000000.+cam.direction.z*10.))%1497428372);
     for (var s = 0; s < samples_per_pixel; s++) {
         var offset = vec3(0.);
         if samples_per_pixel > 1 {
@@ -379,6 +385,8 @@ fn compute(global_id: vec2<u32>) {
     // c = vec3(rand_05_centered());
     // let texcoord = vec2(i32(global_id.x), i32(global_id.y * cam.img_size.y));
     // c = cam.direction;
+    // c = vec3(0.);
+    // c = vec3_rand(0, 1.);
     c *= 255.;
     var out = vec4(vec3<u32>(abs(c)), 255u);
     // out.r = u32(cam.img_size.x/100);

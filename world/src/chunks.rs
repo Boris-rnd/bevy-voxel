@@ -5,14 +5,14 @@ use crate::*;
 #[derive(Default, Debug, Clone)]
 pub struct VoxelChunk {
     // Todo: change idx_in_parent to u8 with 2 bits allocated to prefix_in_block_data_array ?
-    pub idx_in_parent: u32,
+    // pub idx_in_parent: u32,
     pub inner: [u32; CHUNK_U32_LEN],
     pub prefix_in_block_data_array: [u32; 4],
 }
 impl VoxelChunk {
     pub fn empty(idx_in_parent: u32, prefix_in_block_data_array: [u32; 4]) -> Self {
         Self {
-            idx_in_parent,
+            // idx_in_parent,
             inner: [0; _],
             prefix_in_block_data_array,
         }
@@ -33,11 +33,11 @@ impl VoxelChunk {
         s
     }
     /// Returns values ranging between 0..4
-    pub fn local_pos(&self) -> LocalPos {
-        LocalPos {
-            idx: self.idx_in_parent.try_into().unwrap(),
-        }
-    }
+    // pub fn local_pos(&self) -> LocalPos {
+    //     LocalPos {
+    //         idx: self.idx_in_parent.try_into().unwrap(),
+    //     }
+    // }
     /// Returns a value between 0..4
     // #[track_caller]
     // pub fn to_local_pos(&self, world_pos: IVec3, parent_pos: IVec3) -> LocalPos {

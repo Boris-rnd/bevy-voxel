@@ -101,7 +101,7 @@ impl GameWorld {
         {
             let mut map_data_id = VoxelChunkID::new(0);
             let mut parent_pos = IVec3::ZERO;
-            let mut local_pos;
+            let mut local_pos = IVec3::ZERO ;
             if map_data.is_none() {
                 log::trace!("\n------Getting block at {:?}-------", pos);
             } else {
@@ -114,7 +114,7 @@ impl GameWorld {
             for depth in 1..100 {
                 let chunk = self.get_voxel_chunk(map_data_id).unwrap();
                 let chunk_size = self.root_size() as u32 / (depth_to_chunk_size(depth - 1) as u32);
-                parent_pos += chunk.local_pos().ivec3() * chunk_size as i32;
+                parent_pos += local_pos * chunk_size as i32;
                 local_pos =
                     ((pos - parent_pos).div_euclid(IVec3::splat((chunk_size / CHUNK_SIZE32) as _)));
                 let local_pos_idx = match local_pos.to_local_pos() {
@@ -576,12 +576,12 @@ impl GameWorld {
         }
         let mut map_data_id = VoxelChunkID::new(0);
         let mut parent_pos = IVec3::ZERO;
-        let mut local_pos;
+        let mut local_pos = IVec3::ZERO;
         for depth in 1..max_depth + 1 {
             // println!("Checking depth {}", depth);
             let chunk = self.get_voxel_chunk(map_data_id).unwrap();
             let chunk_size = self.root_size() as u32 / (depth_to_chunk_size(depth - 1) as u32);
-            parent_pos += chunk.local_pos().ivec3() * chunk_size as i32;
+            parent_pos += local_pos * chunk_size as i32;
             local_pos =
                 ((pos - parent_pos).div_euclid(IVec3::splat((chunk_size / CHUNK_SIZE32) as _)));
 
