@@ -236,6 +236,8 @@ fn chunk_depth_to_size(depth: u32) -> u32 {
     return u32(pow(f32(CHUNK_SIZE), f32(depth)));
 }
 
+// Small depth = big size
+// ex: depth=1 -> root_chunk_size/4
 fn depth_to_chunk_size(depth: u32) -> u32 {
     // Convert depth to chunk size (16, 8, 4, 2, 1)
     return root_chunk_size() / chunk_depth_to_size(depth);
@@ -558,11 +560,11 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecord {
     res.normal = circle_normal;
     res.t = t;
     // data = data%7;
-    let r= data & 0xFF;
-    let g= (data >> 8) & 0xFF;
-    let b= (data >> 16) & 0xFF;
+    let r = data & 0xFF;
+    let g = (data >> 8) & 0xFF;
+    let b = (data >> 16) & 0xFF;
     let metallic = (data >> 24) & 1;
-    res.color = vec3(f32(r)/255., f32(g)/255., f32(b)/255.);
+    res.color = vec3(f32(r) / 255., f32(g) / 255., f32(b) / 255.);
     // if data > 5 {
     //     res.color = vec3(f32(data) / 255., f32(data) / 255., f32(data) / 255.);
     // } else {
@@ -576,61 +578,257 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecord {
     // }
     return res;
 }
-fn hit(ray: Ray) -> HitRecord {
-    var miss = invalid_rec();
 
-    let root = voxel_chunks[0];
+fn set_bit_if_in_range(bit_mask: array<u32, CHUNK_U32_COUNT>, bit_pos: vec3<u32>) -> array<u32, CHUNK_U32_COUNT> {
+    if (any(bit_pos >= vec3<u32>(CHUNK_SIZE))) {
+        return bit_mask;
+    }
+    let chunk_idx = bit_pos.x | (bit_pos.y << CHUNK_SHIFT) | (bit_pos.z << (CHUNK_SHIFT * 2u));
+    let word = chunk_idx / 32u;
+    let bit = 1u << (chunk_idx % 32u);
+    var b = bit_mask;
+    b[word] = b[word] | bit;
+    return b;
+}
+
+fn gen_chunk_mask(ray: Ray, start_pos_local: vec3<f32>) -> array<u32, CHUNK_U32_COUNT> {
+    var posf = start_pos_local;
+    let dir = ray.dir;
+    let rcp = 1.0 / dir;
+    var mask = array<u32, CHUNK_U32_COUNT>(4294967295, 4294967295);
+
+    loop {
+        // integer voxel inside chunk, safe conv via floor+clamp
+        let pf = floor(posf);
+        if any(pf<vec3(0.) || pf > vec3(f32(CHUNK_SIZE)-1.)) {break;}
+        let posi = vec3<u32>(pf);
+
+        // set current voxel and immediate forward neighbors (x+, y+, z+)
+        mask = set_bit_if_in_range(mask, posi);
+        mask = set_bit_if_in_range(mask, posi + vec3<u32>(1u, 0u, 0u));
+        mask = set_bit_if_in_range(mask, posi + vec3<u32>(0u, 1u, 0u));
+        mask = set_bit_if_in_range(mask, posi + vec3<u32>(0u, 0u, 1u));
+
+        // compute distance to next voxel boundary along each axis (respect sign)
+        let idxf = floor(posf);
+        let next = select(idxf, idxf + vec3<f32>(1.0), dir > vec3<f32>(0.0));
+        let tMax = (next - posf) * rcp;
+        let tStep = min(tMax.x, min(tMax.y, tMax.z));
+
+        // stop if non-finite or we will leave chunk
+        if (!(tStep < 1e20)) { break; } // guard
+        // step a little less than full boundary to avoid re-hitting same voxel due to float error
+        let eps = 1e-4*4;
+        posf = posf + dir * (tStep + eps);
+    }
+    return mask;
+}
+
+fn local_pos_to_ivec3(idx: u32) -> vec3<u32> {
+    let x = idx & u32(CHUNK_MASK);
+    let y = (idx >> CHUNK_SHIFT) & u32(CHUNK_MASK);
+    let z = (idx >> (CHUNK_SHIFT * 2u)) & u32(CHUNK_MASK);
+    return vec3<u32>(x, y, z);
+}
+fn hit(ray: Ray) -> HitRecord {
+   
+    if (true) {return prev_hit(ray);}
+     var miss = invalid_rec();
+
+    // init posf inside world/root
+    var posf = ray.orig;
     let world_min = vec3<f32>(0.0);
     let world_max = vec3<f32>(f32(root_chunk_size()));
-
-    // Intersect ray with root AABB
-    var t = hit_box_t(ray, world_min, world_max);
-    if t == INVALID_BOX_HIT {
-        return miss;
+    if (!(all(ray.orig > world_min) && all(ray.orig < world_max))) {
+        let tbox = hit_box_t(ray, world_min, world_max);
+        if (tbox == INVALID_BOX_HIT) { return miss; }
+        posf = at(ray, tbox + 1e-3);
     }
 
-    // Start just inside
-    var posf = at(ray, t + 1e-3);
-    if all(ray.orig > world_min) && all(ray.orig < world_max) {
-        posf = ray.orig;
-    }
-
-    let dir = ray.dir;
-    let rcp = (1.0 / dir);
-    // Could use rcp but doesn't fix any graphical glitches
-    let stepf = sign(dir); // select(vec3(-1.0), vec3(1.0), ray.dir > vec3(0.0))
-    let step = vec3<i32>(stepf);        // for index stepping
-
-    // Clamp a to multiples of S in the correct direction
-    let eps = 5e-3;
-
-    // Curr_chunk = curr_chunks[curr_chunks_len-1]
+    // stacks / context
     var curr_chunks = array<VoxelChunk, 6>();
     var parent_pos_stack: array<vec3<i32>, 7>;
-    var idx_stack: array<u32, 7>;
+    parent_pos_stack[0] = vec3<i32>(0); // Useless but might be usefull if change root chunk's origin
+    var curr_depth: u32 = 1u;
+    var curr_chunks_len: u32 = 1u;
+    curr_chunks[0] = voxel_chunks[0];
+
+    // DDA helpers
+    let stepf = sign(ray.dir);
+    let rcp = 1.0 / ray.dir;
+
+    // iteration cap
+    var max_iter = 50;
+    if (is_accumulating_frames()) { max_iter = 50; }
+
+    // compute initial mask for root chunk (posf relative to parent_pos)
+    var child_size_i = i32(depth_to_chunk_size(curr_depth));
+    var local_start = posf - vec3<f32>(parent_pos_stack[curr_depth - 1u]);
+    var mask = gen_chunk_mask(ray, local_start / f32(child_size_i));
+
+    var iter: i32 = 0;
+    while iter < max_iter {
+        if (iter>=max_iter) {break;}
+        iter++;
+
+        // combine mask with current chunk occupancy -> candidates
+        var out = array<u32, CHUNK_U32_COUNT>();
+        var any_hit = false;
+        let curr_chunk = curr_chunks[curr_chunks_len - 1u];
+        for (var i = 0u; i < CHUNK_U32_COUNT; i++) {
+            out[i] = mask[i] & curr_chunk.inner[i];
+            any_hit = any_hit || (out[i] != 0);
+        }
+        if (any_hit == false) {
+            // advance along ray (DDA step) and recompute mask at same depth
+            // compute child size for current depth
+            child_size_i = i32(depth_to_chunk_size(curr_depth));
+            let cell_size = i32(depth_to_chunk_size(curr_depth)) / i32(CHUNK_SIZE);
+            let S = f32(cell_size);
+            let posi = vec3<i32>(posf);
+            let world_pos_in_parent = posf - vec3<f32>(parent_pos_stack[curr_depth - 1u]);
+            let idxf = floor(world_pos_in_parent / S);
+            let next = select(idxf * S, (idxf + vec3<f32>(1.0)) * S, stepf > vec3<f32>(0.0));
+            var tMax = (next - world_pos_in_parent) * rcp;
+            let tStep = min(tMax.x, min(tMax.y, tMax.z));
+            if (!(tStep < 1e20)) { break; }
+            let eps = 1e-3 * S;
+            posf += ray.dir * (tStep + eps);
+            // recompute mask for current chunk using new posf
+            child_size_i = i32(depth_to_chunk_size(curr_depth));
+            mask = gen_chunk_mask(ray, (posf - vec3<f32>(parent_pos_stack[curr_depth - 1u])) / f32(cell_size));
+            continue;
+        }
+
+        // iterate candidate bits; clear lowest bit per word
+        var descended = false;
+        for (var i = 0u; i < CHUNK_U32_COUNT; i++) {
+            while (out[i] != 0u) {
+                let local_idx = countTrailingZeros(out[i]);
+                // clear lowest set bit
+                out[i] = out[i] & (out[i] - 1u);
+
+                let idx = local_idx + 32u * i;
+                let local3 = local_pos_to_ivec3(idx); // in [0..CHUNK_SIZE)
+                // compute child origin in world coords (same formula as prev_hit)
+                let child_size_here = i32(depth_to_chunk_size(curr_depth));
+                let cell_origin = parent_pos_stack[curr_depth - 1u] + vec3<i32>(
+                    i32(local3.x) * child_size_here,
+                    i32(local3.y) * child_size_here,
+                    i32(local3.z) * child_size_here
+                );
+
+                // quick AABB test at child cell level (child cell extent = child_size_here)
+                let cell_min = vec3<f32>(cell_origin);
+                let cell_max = vec3<f32>(cell_origin + vec3<i32>(child_size_here));
+                let rec_t = hit_box_t(ray, cell_min, cell_max);
+                if (rec_t == INVALID_BOX_HIT) { continue; }
+
+                // lookup data for this local cell
+                let map_data_idx = get_data_idx_in_chunk(curr_chunk, idx);
+                if (map_data_idx.array_idx >= arrayLengthBlockData(map_data_idx.array_array_idx)) { continue; }
+                let curr_data = get_block_data_follow_tails(map_data_idx);
+                if (curr_data == 4294967295u) { continue; }
+                let ty = curr_data & 3u;
+
+                if (ty == 2u) {
+                    // actual block -> compute precise hit and return
+                    // use voxel-sized AABB (if child_size_here == 1), otherwise refine
+                    // here we return the block hit
+                    return valid_rec(vec3(0));
+                    // return hit_box_gen(ray, Box(vec3<f32>(cell_origin), vec3<f32>(cell_origin + vec3<i32>(child_size_here)), curr_data >> 2u));
+                } else if (ty == 1u) {
+                    // descend into smaller chunk: push to stack and recompute mask for child
+                    // update stacks
+                    parent_pos_stack[curr_depth] = cell_origin;
+                    curr_chunks[curr_chunks_len] = voxel_chunks[curr_data >> 2u];
+                    curr_chunks_len = curr_chunks_len + 1u;
+                    curr_depth = curr_depth + 1u;
+
+                    // recompute mask for the new child chunk using same posf (relative to new child origin)
+                    let next_child_size = i32(depth_to_chunk_size(curr_depth));
+                    // local pos in child's coordinates = (posf - child_origin) / next_child_size
+                    mask = gen_chunk_mask(ray, (posf - vec3<f32>(cell_origin)) / f32(next_child_size));
+                    descended = true;
+                    break; // break words loop to restart with new chunk context
+                }
+            }
+            if (descended) { break; }
+        }
+
+        if (descended) { continue; }
+        let cell_size = i32(depth_to_chunk_size(curr_depth)) / i32(CHUNK_SIZE);
+
+        // If we processed all candidate bits and didn't descend or hit a block, advance ray
+        child_size_i = i32(depth_to_chunk_size(curr_depth)) / i32(CHUNK_SIZE);
+        let parent_pos = parent_pos_stack[curr_depth - 1u];
+        let S = f32(cell_size);
+        let world_pos_in_parent = posf - vec3<f32>(parent_pos);
+        let idxf = floor(world_pos_in_parent / S);
+        let next = select(idxf * S, (idxf + vec3<f32>(1.0)) * S, stepf > vec3<f32>(0.0));
+        var tMax = (next - world_pos_in_parent) * rcp;
+        let tStep = min(tMax.x, min(tMax.y, tMax.z));
+        if (!(tStep < 1e20)) { break; }
+        posf += ray.dir * (tStep + (1e-3 * S));
+
+        // recompute mask for current depth after stepping
+        mask = gen_chunk_mask(ray, (posf - vec3<f32>(parent_pos_stack[curr_depth - 1u])) / f32(cell_size));
+        mask = array<u32, CHUNK_U32_COUNT>(4294967295, 4294967295);
+    }
+
+    return miss;
+}
+
+
+
+fn prev_hit(ray: Ray) -> HitRecord {
+    var miss = invalid_rec();
+
+    // Initialise ray inside root chunk
+    var posf = ray.orig;
+    let world_min = vec3<f32>(0.0);
+    let world_max = vec3<f32>(f32(root_chunk_size()));
+    if all(ray.orig > world_min) && all(ray.orig < world_max) {
+        posf = ray.orig;
+    } else {
+
+        var t = hit_box_t(ray, world_min, world_max);
+        if t == INVALID_BOX_HIT {
+            return miss;
+        }
+        posf = at(ray, t + 1e-3);
+    }
+
+    // Setup stacks for the descent of sparse tree
+    var curr_chunks = array<VoxelChunk, 6>();
+    var parent_pos_stack: array<vec3<i32>, 7>;
+
     parent_pos_stack[0] = vec3<i32>(0);
     var curr_depth = 1u;
     var curr_chunks_len = 1u;
-    curr_chunks[0] = root;
-
-    var small_tstep_count = 0;
-
+    curr_chunks[0] = voxel_chunks[0];
+    var chunk_size = root_chunk_size();
+    
     // Main traversal
-    // Hard cap to avoid infinite loops in degenerate cases
+    var stepf = sign(ray.dir);
+    let rcp = 1. / ray.dir;
+
+
+
+
+    // Hard cap to avoid infinite loops
     var max_iter = 500;
     if is_accumulating_frames() == true {
         max_iter = 1000;
     }
-    var bit_mask_for_chunk = array<u32, 2>();
     var iter = 0;
     for (; iter < max_iter; iter = iter + 1) {
-        // Query world at current integer voxel position
         let posi = vec3<i32>(posf);
         let parent_pos = parent_pos_stack[curr_depth - 1u];
-        // Get chunk's child size as integer
         let child_size_i = i32(depth_to_chunk_size(curr_depth));
         let local_pos = div_euclid_v3(posi - parent_pos, vec3(child_size_i));
-        if any((posi - parent_pos)<vec3(0)) || any(local_pos >= vec3(i32(CHUNK_SIZE))) {
+        // Check if outside of current chunk
+        if any((posi - parent_pos) < vec3(0)) || any(local_pos >= vec3(i32(CHUNK_SIZE))) {
             // Outside of previous chunk, if curr_depth==1, then outside of root chunk so won't hit anything else
             if curr_depth == 1u { 
                 break;
@@ -641,34 +839,29 @@ fn hit(ray: Ray) -> HitRecord {
             continue;
         }
 
-        var chunk_idx = u32(local_pos.x) | (u32(local_pos.y) << CHUNK_SHIFT) | (u32(local_pos.z) << (CHUNK_SHIFT*2));
-        bit_mask_for_chunk[chunk_idx/32u] = bit_mask_for_chunk[chunk_idx/32u] | (1u << (chunk_idx % 32u));
-        let map_data_idx = get_data_idx_in_chunk(curr_chunks[curr_chunks_len - 1u], chunk_idx);
+        var chunk_idx = u32(local_pos.x) | (u32(local_pos.y) << CHUNK_SHIFT) | (u32(local_pos.z) << (CHUNK_SHIFT * 2));
         // Checks if bit is set, if so computes the idx, else returns U32::MAX (which will be bigger than arrayLength)
+        let map_data_idx = get_data_idx_in_chunk(curr_chunks[curr_chunks_len - 1u], chunk_idx);
         if map_data_idx.array_idx < arrayLengthBlockData(map_data_idx.array_array_idx) {
             let curr_data = get_block_data_follow_tails(map_data_idx);
             if curr_data == 4294967295u { // Never happens but maybe one day i'll introduce a breaking bug
                 return valid_rec(vec3(1., 0., 1.));
             }
             // let curr_data = get_block_data(MapDataID(map_data_idx.array_array_idx, map_data_idx.array_idx)).data;
-        
+
             let ty = curr_data & 3u;
             if ty == 1u { // Chunk, so we descend into it
-                idx_stack[curr_depth - 1u] = chunk_idx;
                 parent_pos_stack[curr_depth] = parent_pos + vec3<i32>(
                     local_pos.x * child_size_i,
                     local_pos.y * child_size_i,
                     local_pos.z * child_size_i
                 );
                 curr_chunks[curr_chunks_len] = voxel_chunks[curr_data >> 2];
-                if ((curr_chunks[curr_chunks_len].inner[0]&bit_mask_for_chunk[0]) == 0u) && ((curr_chunks[curr_chunks_len].inner[1]&bit_mask_for_chunk[1]) == 0u) {
-                } else {
-                }
                 curr_chunks_len += 1u;
                 curr_depth += 1u;
                 continue; // IMPORTANT: re-evaluate at new depth
             } else if ty == 2u { // Block
-                var res = hit_box_gen(ray, Box(vec3<f32>(posi), vec3<f32>(posi) + vec3(1.0), u32(curr_data>>2)));
+                var res = hit_box_gen(ray, Box(vec3<f32>(posi), vec3<f32>(posi) + vec3(1.0), u32(curr_data >> 2)));
                 // var c = vec3(1., 0., 0.);
                 // break;
                 // return valid_rec(c);
@@ -677,42 +870,42 @@ fn hit(ray: Ray) -> HitRecord {
         }
         // Should be useless check but I like to keep it
         // Check if we have found something
-        // if map_data_idx.array_array_idx != 4294967295u {
-        //     return valid_rec(vec3(0., 1., 1.));
-        // }
+        if map_data_idx.array_array_idx != 4294967295u {
+            return valid_rec(vec3(0., 1., 1.));
+        }
         let S = f32(child_size_i);
         let world_pos_in_parent = posf - vec3<f32>(parent_pos);
 
         // handle zeros
         let inf = 1e30;
         let idxf = floor(world_pos_in_parent / S);
-        let next = select(idxf*S, (idxf+vec3(1.))*S, stepf>vec3(0.));
+        let next = select(idxf * S, (idxf + vec3(1.)) * S, stepf > vec3(0.));
         var tMax = (next - world_pos_in_parent) * rcp;
         let tStep = min(tMax.x, min(tMax.y, tMax.z));
-        // if !(tStep < inf) { 
-        //     return valid_rec(vec3(1., 0., 1.));
-        //  }
+        if !(tStep < inf) {
+            return valid_rec(vec3(1., 0., 1.));
+        }
 
         // nudge with scale-aware epsilon
         let eps = 1e-2 * S;
-        posf += dir * (tStep + eps);
+        posf += ray.dir * (tStep + eps);
     }
-    return valid_rec(vec3(0., 0., f32(iter)/500.));
-    // return miss;
+    // return valid_rec(vec3(0., 0., f32(iter)/500.));
+    return miss;
 }
 fn process_hit(ray: Ray, hit_result: HitRecord) -> HitRecord {
     var res = hit_result;
     
     // Lambertian shading - use abs or negate ray direction
     let lambert = max(0.0, dot(res.normal, ray.dir));
-    res.color *= lambert;
+    // res.color *= lambert;
     
     // Distance-based fog (attenuate, don't add)
     let fog_distance = 4000.0;
-    let fog_factor = min(max(0.01, exp(1.-distance(cam.center, res.p) / fog_distance)), 1.);
-    res.color *= fog_factor;
+    // let fog_factor = min(max(0.01, exp(1. - distance(cam.center, res.p) / fog_distance)), 1.);
+    // res.color *= fog_factor;
 
-    
+
     return res;
 }
 // Improved ray_color with better bounce handling
@@ -721,10 +914,10 @@ fn ray_color(initial_ray: Ray) -> vec3<f32> {
     var accumulated_color = vec3(1.0);
     var final_color = vec3(0.0);
     let max_bounces = 5; // Increase for more realism
-    
+
     for (var bounce = 0; bounce < max_bounces; bounce += 1) {
         var res = hit(ray);
-        
+
         if res.t != 1e30 {
             // Process the hit with proper shading
             res = process_hit(ray, res);
@@ -735,16 +928,16 @@ fn ray_color(initial_ray: Ray) -> vec3<f32> {
             // Material type detection (you can make this data-driven)
             let is_metallic = false; // Add material property to your hit record
             let roughness = 0.5; // Control reflection sharpness
-            
+
             var next_direction: vec3<f32>;
-            
+
             if is_metallic {
                 // Metallic reflection
                 next_direction = reflect(ray.dir, res.normal);
                 // Add roughness
                 next_direction += random_unit_vector() * roughness;
                 next_direction = normalize(next_direction);
-                
+
                 accumulated_color *= res.color;
             } else {
                 // Diffuse (Lambertian) scattering
@@ -766,7 +959,7 @@ fn ray_color(initial_ray: Ray) -> vec3<f32> {
             
             // Russian roulette termination for efficiency (optional)
             let survival_probability = max(accumulated_color.r, max(accumulated_color.g, accumulated_color.b));
-            if rand(0., 2) > survival_probability && bounce > (max_bounces/2) {
+            if rand(0., 2) > survival_probability && bounce > (max_bounces / 2) {
                 break;
             }
             // if min(accumulated_color.r, min(accumulated_color.g, accumulated_color.b)) < 0.01 {
@@ -804,9 +997,9 @@ fn skybox(ray_dir: vec3<f32>) -> vec3<f32> {
 }
 
 fn compute(global_id: vec2<u32>) {
-    
+
     let i = f32(global_id.x);
-    let j = (1. - f32(global_id.y)/f32(cam.img_size.y)) * f32(cam.img_size.y);
+    let j = (1. - f32(global_id.y) / f32(cam.img_size.y)) * f32(cam.img_size.y);
     let lookfrom = cam.center;     // Point camera is looking from
     let lookat = cam.center + cam.direction;// Point camera is looking at
     let vup = vec3(0., 1., 0.); // Camera-relative "up" direction
@@ -849,10 +1042,10 @@ fn compute(global_id: vec2<u32>) {
     var antialiasing = false;
     if samples_per_pixel > 1 {antialiasing = true;}
     var c = vec3(0.);
-    
-    rng_state = u32((((cam.accum_frames*1301348925*u32(429258578533.*sin(f32(cam.accum_frames)/100.))))&0xFF) + global_id.x + global_id.y*cam.img_size.x);
-    rng_state += u32((abs(cam.center.x*10000000.+cam.center.y*1000000000.+cam.center.z*10000000.))%14982428);
-    rng_state += u32((abs(cam.direction.x*100000.+cam.direction.y*1000000000.+cam.direction.z*10.))%1497428372);
+
+    rng_state = u32((((cam.accum_frames * 1301348925 * u32(429258578533. * sin(f32(cam.accum_frames) / 100.)))) & 0xFF) + global_id.x + global_id.y * cam.img_size.x);
+    rng_state += u32((abs(cam.center.x * 10000000. + cam.center.y * 1000000000. + cam.center.z * 10000000.)) % 14982428);
+    rng_state += u32((abs(cam.direction.x * 100000. + cam.direction.y * 1000000000. + cam.direction.z * 10.)) % 1497428372);
     for (var s = 0; s < samples_per_pixel; s++) {
         var offset = vec3(0.);
         if samples_per_pixel > 1 {
@@ -869,10 +1062,10 @@ fn compute(global_id: vec2<u32>) {
         var r = Ray(orig, normalize(pixel_center - lookfrom));
         let depth_x = global_id.x / 2u;
         let depth_y = global_id.y / 2u;
-        let depth_idx = depth_x + depth_y * (cam.img_size.x/2);
+        let depth_idx = depth_x + depth_y * (cam.img_size.x / 2);
         let prev_t = max_depth[depth_idx];
         // if prev_t == 1e30 {return;}
-        r.orig = at(r, prev_t);
+        // r.orig = at(r, prev_t);
         
         // r.orig = at(r, max_depth[global_id.x/2+global_id.y/2*(cam.img_size.x/2)]);
         c += ray_color(r) / f32(samples_per_pixel);
@@ -902,14 +1095,14 @@ fn compute(global_id: vec2<u32>) {
     out.g = min(out.g, 255u);
     out.b = min(out.b, 255u);
     out.a = min(out.a, 255u);
-    let idx = global_id.x+global_id.y*(cam.img_size.x);
+    let idx = global_id.x + global_id.y * (cam.img_size.x);
     let prev = accumulated_tex[idx];
     // out = u32(max_depth[idx]);
-    let prev_v= vec4(prev&0xffu, (prev>>8u)&0xffu,  (prev>>16u)&0xffu,  (prev>>24u)&0xffu);
-    out = (prev_v*cam.accum_frames + out) / (cam.accum_frames + 1);
+    let prev_v = vec4(prev & 0xffu, (prev >> 8u) & 0xffu, (prev >> 16u) & 0xffu, (prev >> 24u) & 0xffu);
+    out = (prev_v * cam.accum_frames + out) / (cam.accum_frames + 1);
     accumulated_tex[idx] = (out.r) | ((out.g) << 8u) | ((out.b) << 16u) | ((out.a) << 24u);
     // accumulated_tex[global_id.x+global_id.y*(cam.img_size.x)] = cam.accum_frames;
-    if cam.accum_frames%2==0 {
+    if cam.accum_frames % 2 == 0 {
     // out = (textureLoad(accumulated_img, texcoord) * f32(cam.accum_frames) + out) / f32(cam.accum_frames + 1);
     } else {
         // accumulated_tex2[global_id.x+global_id.y*(cam.img_size.x)] = (out.r) | ((out.g) << 8u) | ((out.b) << 16u) | ((out.a) << 24u);

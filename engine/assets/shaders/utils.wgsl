@@ -222,6 +222,8 @@ fn chunk_depth_to_size(depth: u32) -> u32 {
     return u32(pow(f32(CHUNK_SIZE), f32(depth)));
 }
 
+// Small depth = big size
+// ex: depth=1 -> root_chunk_size/4
 fn depth_to_chunk_size(depth: u32) -> u32 {
     // Convert depth to chunk size (16, 8, 4, 2, 1)
     return root_chunk_size() / chunk_depth_to_size(depth);

@@ -132,7 +132,7 @@ pub fn load_world(path: &str) -> Result<GameWorld> {
     // println!("Global min: {:?} \t Global max: {:?}", global_min, global_max);
     // let global_size = global_max - global_min;
     // println!("Relative: {:?}", global_size);
-    let mut world = GameWorld::new(4096, 8);
+    let mut world = GameWorld::new(512, 8);
    
     iterate_vox_tree(&vox_tree, |model, position, orientation| {
         let rotation_mat = Mat3::from_cols_array_2d(&orientation.to_cols_array_2d());
@@ -157,7 +157,7 @@ pub fn load_world(path: &str) -> Result<GameWorld> {
             let col = vox_tree.palette[voxel.i as usize];
             let col = col.r as u32 | ((col.g as u32) << 8u32) | ((col.b as u32) << 16u32);
 
-            if pos.min_element() < 0 {continue;}
+            if pos.min_element() < 0 || (pos.cmpge(IVec3::splat((world.root_size()-1) as _))).any() {continue;}
             world.set_block(pos, MapData::Block(col));
         }
     });
