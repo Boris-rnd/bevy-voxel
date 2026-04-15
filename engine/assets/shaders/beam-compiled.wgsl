@@ -53,7 +53,7 @@ fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     return v - 2. * dot(v, n) * n;
 }
 
-var<private> rng_seed: f32 = 1.;
+// var<private> rng_seed: f32 = 1.;
 
 fn random_unit_vector() -> vec3<f32> {
     for (var i = 0; i < 5; i++) {
@@ -87,10 +87,11 @@ fn random_in_unit_disk() -> vec3<f32> {
 }
 var<private> rng_state: u32;
 
-// Initialize RNG state based on pixel coordinates and frame number
-fn init_rng(pixel: vec2<u32>, frame: u32) {
-    // Combine pixel coordinates and frame into a unique seed
-    rng_state = wang_hash(pixel.x + wang_hash(pixel.y + wang_hash(frame)));
+// Init RNG: high-entropy seed from pixel + frame + camera state
+fn init_rng(pixel: vec2<u32>, frame: u32, cam_seed: u32) {
+    var seed = pixel.x * 374761393u ^ pixel.y * 668265263u;
+    seed = seed ^ frame * 362437u ^ cam_seed * 2246822519u;
+    rng_state = wang_hash(seed | 1u); // ensure non-zero
 }
 
 // Improved Wang hash function
@@ -395,6 +396,9 @@ fn valid_rec(color: vec3<f32>) -> HitRecord {
 fn invalid_rec() -> HitRecord {
     return HitRecord(vec3(0.), vec3(0.), 1e30, vec3(0.));
 }
+fn to_far_away_rec() -> HitRecord {
+    return HitRecord(vec3(1.), vec3(0.), 1e30, vec3(0.));
+}
 
 struct MapData {
     // 2 first bits = type:
@@ -555,7 +559,8 @@ fn ray_depth(ray: Ray) -> f32 {
     // Hard cap to avoid infinite loops in degenerate cases
     var max_iter = 500;
     var bit_mask_for_chunk = array<u32, 2>();
-    for (var iter = 0; iter < max_iter; iter = iter + 1) {
+    var iter = 0;
+    for (; iter < max_iter; iter = iter + 1) {
         // Query world at current integer voxel position
         let posi = vec3<i32>(posf);
         let parent_pos = parent_pos_stack[curr_depth - 1u];
@@ -630,9 +635,12 @@ fn ray_depth(ray: Ray) -> f32 {
         //  }
 
         // nudge with scale-aware epsilon
-        let eps = 1e-3 * S;
+        let eps = (1e-3 * S)*(1. + f32(iter)/100.);
         posf += dir * (tStep + eps);
     }
+    // if iter >= max_iter {
+    //     return 1e29;
+    // }
     return ray_t_from_pos(ray, posf)-eps;
 }
 
@@ -674,8 +682,16 @@ fn compute(global_id: vec2<u32>, prev_t: f32) -> f32 {
 
 
 
-    rng_seed = f32((u32(f32(cam.accum_frames)))&(0xFF)) + (f32(global_id.x) + f32(global_id.y) * 10.);
-    
+    let cam_seed = wang_hash(
+        u32(abs(cam.center.x * 1000.0)) ^
+        u32(abs(cam.center.y * 1000.0)) ^
+        u32(abs(cam.center.z * 1000.0)) ^
+        u32(abs(cam.direction.x * 1000.0)) ^
+        u32(abs(cam.direction.y * 1000.0)) ^
+        u32(abs(cam.direction.z * 1000.0))
+    );
+    init_rng(global_id.xy, cam.accum_frames, cam_seed);
+
     let pixel_center = pixel00_loc + ((i) * pixel_delta_u) + ((j) * pixel_delta_v);
     var orig = lookfrom;
     var r = Ray(orig, normalize(pixel_center - lookfrom));
@@ -704,11 +720,11 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     // read seed from previous pass (¼→½): previous writes live at even cells
     var prev_t = 0.0;
-    if (pc.beam_idx == 0u) {
-        // current pass is ½-res; previous pass was ¼-res → even indices in half grid
-        let prev_idx = (hx & ~1u) + ((hy & ~1u) * half_w);
-        prev_t = max_depth[prev_idx];
-    }
+    // if (pc.beam_idx == 0u) {
+    //     // current pass is ½-res; previous pass was ¼-res → even indices in half grid
+    //     let prev_idx = (hx & ~1u) + ((hy & ~1u) * half_w);
+    //     prev_t = max_depth[prev_idx];
+    // }
     let curr_idx = hx + hy * half_w;     // valid for both passes (¼ maps via hx/hy)
 
     let delta_t = compute(vec2<u32>(x, y), prev_t);

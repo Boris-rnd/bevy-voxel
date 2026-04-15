@@ -132,7 +132,7 @@ pub fn load_world(path: &str) -> Result<GameWorld> {
     // println!("Global min: {:?} \t Global max: {:?}", global_min, global_max);
     // let global_size = global_max - global_min;
     // println!("Relative: {:?}", global_size);
-    let mut world = GameWorld::new(512, 8);
+    let mut world = GameWorld::new(4096, 8);
    
     iterate_vox_tree(&vox_tree, |model, position, orientation| {
         let rotation_mat = Mat3::from_cols_array_2d(&orientation.to_cols_array_2d());

@@ -59,7 +59,7 @@ fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     return v - 2. * dot(v, n) * n;
 }
 
-var<private> rng_seed: f32 = 1.;
+// var<private> rng_seed: f32 = 1.;
 
 fn random_unit_vector() -> vec3<f32> {
     for (var i = 0; i < 5; i++) {
@@ -93,10 +93,11 @@ fn random_in_unit_disk() -> vec3<f32> {
 }
 var<private> rng_state: u32;
 
-// Initialize RNG state based on pixel coordinates and frame number
-fn init_rng(pixel: vec2<u32>, frame: u32) {
-    // Combine pixel coordinates and frame into a unique seed
-    rng_state = wang_hash(pixel.x + wang_hash(pixel.y + wang_hash(frame)));
+// Init RNG: high-entropy seed from pixel + frame + camera state
+fn init_rng(pixel: vec2<u32>, frame: u32, cam_seed: u32) {
+    var seed = pixel.x * 374761393u ^ pixel.y * 668265263u;
+    seed = seed ^ frame * 362437u ^ cam_seed * 2246822519u;
+    rng_state = wang_hash(seed | 1u); // ensure non-zero
 }
 
 // Improved Wang hash function
@@ -401,6 +402,9 @@ fn valid_rec(color: vec3<f32>) -> HitRecord {
 fn invalid_rec() -> HitRecord {
     return HitRecord(vec3(0.), vec3(0.), 1e30, vec3(0.));
 }
+fn to_far_away_rec() -> HitRecord {
+    return HitRecord(vec3(1.), vec3(0.), 1e30, vec3(0.));
+}
 
 struct MapData {
     // 2 first bits = type:
@@ -520,43 +524,38 @@ fn ray_t_from_pos(ray: Ray, pos: vec3<f32>) -> f32 {
 // @group(2) @binding(100) var<uniform> cam.img_size: vec2<f32>;
 
 
-fn hit_box_gen(ray: Ray, box: Box) -> HitRecord {
+fn hit_box_gen(ray: Ray, box: Box, chunk_idx: u32, chunk: VoxelChunk) -> HitRecord {
     var res = invalid_rec();
 
     var t = hit_box_t(ray, box.min, box.max);
     if t == INVALID_BOX_HIT {
-        return res; // No hit
+        
+        return valid_rec(vec3(1., 0., 0.)); // No hit
     }
     res.t = t;
     res.p = at(ray, t);
     let center = (box.min + box.max) / 2.;
-    var circle_normal = center - res.p;
-
+    
     var uv: vec2<f32>;
     var data: u32 = box.texture_id;
-    if circle_normal.x > abs(circle_normal.y) && circle_normal.x > abs(circle_normal.z) {
-        uv = (circle_normal).zy;
-        circle_normal = vec3(1., 0., 0.);
-    } else if circle_normal.x < -abs(circle_normal.y) && circle_normal.x < -abs(circle_normal.z) {
-        uv = (circle_normal).zy;
-        circle_normal = vec3(-1., 0., 0.);
-    } else if circle_normal.z > abs(circle_normal.y) && circle_normal.z > abs(circle_normal.x) {
-        uv = (circle_normal).xy;
-        circle_normal = vec3(0., 0., 1.);
-    } else if circle_normal.z < -abs(circle_normal.y) && circle_normal.z < -abs(circle_normal.x) {
-        uv = (circle_normal).xy;
-        circle_normal = vec3(0., 0., -1.);
-    } else if circle_normal.y > abs(circle_normal.x) && circle_normal.y > abs(circle_normal.z) {
-        uv = (circle_normal).xz;
-        circle_normal = vec3(0., 1., 0.);
-        // data = 1;
-    } else if circle_normal.y < -abs(circle_normal.x) && circle_normal.y < -abs(circle_normal.z) {
-        uv = (circle_normal).xz;
-        circle_normal = vec3(0., -1., 0.);
-        // data = 1;
-    } else {
-        circle_normal = vec3(1., 1.5, 1.);
-    }
+    var light_intensity = vec3(1.);
+    var circle_normal = center - res.p;
+    var n = normalize(circle_normal);
+    var abs_n = abs(n);
+
+    // if abs_n.x >= abs_n.y && abs_n.x >= abs_n.z {
+    //     circle_normal = vec3(sign(n.x), 0.0, 0.0);
+    //     uv = res.p.zy;
+    // } else if abs_n.y >= abs_n.x && abs_n.y >= abs_n.z {
+    //     circle_normal = vec3(0.0, sign(n.y), 0.0);
+    //     uv = res.p.xz;
+    // } else {
+    //     circle_normal = vec3(0.0, 0.0, sign(n.z));
+    //     uv = res.p.xy;
+    // }
+    if circle_normal.x > abs(circle_normal.y) && circle_normal.x > abs(circle_normal.z) { uv = (circle_normal).zy; circle_normal = vec3(1., 0., 0.); } else if circle_normal.x < -abs(circle_normal.y) && circle_normal.x < -abs(circle_normal.z) { uv = (circle_normal).zy; circle_normal = vec3(-1., 0., 0.); } else if circle_normal.z > abs(circle_normal.y) && circle_normal.z > abs(circle_normal.x) { uv = (circle_normal).xy; circle_normal = vec3(0., 0., 1.); } else if circle_normal.z < -abs(circle_normal.y) && circle_normal.z < -abs(circle_normal.x) { uv = (circle_normal).xy; circle_normal = vec3(0., 0., -1.); } else if (circle_normal.y) > abs(circle_normal.x) && (circle_normal.y) > abs(circle_normal.z) { // Bottom face 
+        uv = (circle_normal).xz; circle_normal = vec3(0., 1., 0.); } else if circle_normal.y < -abs(circle_normal.x) && circle_normal.y < -abs(circle_normal.z) { uv = (circle_normal).xz; circle_normal = vec3(0., -1., 0.); } else { circle_normal = vec3(1., 1.5, 1.); } res.normal = circle_normal;
+
     res.normal = circle_normal;
     res.t = t;
     // data = data%7;
@@ -564,7 +563,7 @@ fn hit_box_gen(ray: Ray, box: Box) -> HitRecord {
     let g = (data >> 8) & 0xFF;
     let b = (data >> 16) & 0xFF;
     let metallic = (data >> 24) & 1;
-    res.color = vec3(f32(r) / 255., f32(g) / 255., f32(b) / 255.);
+    res.color = vec3(f32(r) / 255., f32(g) / 255., f32(b) / 255.)*light_intensity;
     // if data > 5 {
     //     res.color = vec3(f32(data) / 255., f32(data) / 255., f32(data) / 255.);
     // } else {
@@ -624,16 +623,41 @@ fn gen_chunk_mask(ray: Ray, start_pos_local: vec3<f32>) -> array<u32, CHUNK_U32_
     return mask;
 }
 
+// // Changes light instensity to create fake shadows if block has neighbors on top left/right/front/back
+// fn edge_chunk_shadows(rec: HitRecord, chunk_idx: u32, chunk: VoxelChunk, parent_chunk: VoxelChunk) -> HitRecord {
+//     var res = rec;
+//     let local_pos = local_pos_to_ivec3(chunk_idx);
+//     if local_pos.x > 3 { // Check in neighbor chunks
+//         let neighbor_chunk_idx = get_data_idx_in_chunk(parent_chunk, chunk_idx - 4);
+//         if neighbor_chunk_idx.array_idx < arrayLengthBlockData(neighbor_chunk_idx.array_array_idx) {
+//             let neighbor_data = get_block_data_follow_tails(neighbor_chunk_idx);
+//             if neighbor_data != 4294967295u && (neighbor_data & 3u) == 2u {
+//                 res.color *= 0.7;
+//             }
+//         }
+//     } else {
+//         // Use a bitmask on chunk's inner to check if neighbor exists
+//         let neighbor_pos = ivec3_to_local_pos(local_pos + vec3(1, 1, 0));
+//         if (chunk.inner[neighbor_pos / 32u] & (1u<<(neighbor_pos%32u))) != 0u {
+//             res.color.r *= 10.7;
+//         }
+//     }
+//     return res;
+// }
+
+
 fn local_pos_to_ivec3(idx: u32) -> vec3<u32> {
     let x = idx & u32(CHUNK_MASK);
     let y = (idx >> CHUNK_SHIFT) & u32(CHUNK_MASK);
     let z = (idx >> (CHUNK_SHIFT * 2u)) & u32(CHUNK_MASK);
     return vec3<u32>(x, y, z);
 }
+fn ivec3_to_local_pos(pos: vec3<u32>) -> u32 {
+    return pos.x | (pos.y << CHUNK_SHIFT) | (pos.z << (CHUNK_SHIFT * 2u));
+}
 fn hit(ray: Ray) -> HitRecord {
-   
     if (true) {return prev_hit(ray);}
-     var miss = invalid_rec();
+    var miss = invalid_rec();
 
     // init posf inside world/root
     var posf = ray.orig;
@@ -861,10 +885,8 @@ fn prev_hit(ray: Ray) -> HitRecord {
                 curr_depth += 1u;
                 continue; // IMPORTANT: re-evaluate at new depth
             } else if ty == 2u { // Block
-                var res = hit_box_gen(ray, Box(vec3<f32>(posi), vec3<f32>(posi) + vec3(1.0), u32(curr_data >> 2)));
-                // var c = vec3(1., 0., 0.);
-                // break;
-                // return valid_rec(c);
+                var res = hit_box_gen(ray, Box(vec3<f32>(posi), vec3<f32>(posi) + vec3(1.0), u32(curr_data >> 2)), chunk_idx, curr_chunks[curr_chunks_len-1]);
+                // res = edge_chunk_shadows(res, chunk_idx, curr_chunks[curr_chunks_len-1], curr_chunks[curr_chunks_len-2]);
                 return res; // making posi = 0 and rb 10000 is fun
             }
         }
@@ -887,8 +909,11 @@ fn prev_hit(ray: Ray) -> HitRecord {
         }
 
         // nudge with scale-aware epsilon
-        let eps = 1e-2 * S;
+        let eps = (1e-3 * S)*(1. + f32(iter)/100.);
         posf += ray.dir * (tStep + eps);
+    }
+    if iter >= max_iter {
+        return to_far_away_rec();
     }
     // return valid_rec(vec3(0., 0., f32(iter)/500.));
     return miss;
@@ -897,9 +922,10 @@ fn process_hit(ray: Ray, hit_result: HitRecord) -> HitRecord {
     var res = hit_result;
     
     // Lambertian shading - use abs or negate ray direction
-    let lambert = max(0.0, dot(res.normal, ray.dir));
-    // res.color *= lambert;
-    
+    let light_dir = normalize(vec3<f32>(0.5, -1.0, 0.3)); // pick your sun dir
+    let lambert = max(0.1, dot(res.normal, light_dir));
+    let ray_lambert = max(0.1, dot(res.normal, ray.dir));
+    res.color *= lambert*ray_lambert;
     // Distance-based fog (attenuate, don't add)
     let fog_distance = 4000.0;
     // let fog_factor = min(max(0.01, exp(1. - distance(cam.center, res.p) / fog_distance)), 1.);
@@ -911,74 +937,53 @@ fn process_hit(ray: Ray, hit_result: HitRecord) -> HitRecord {
 // Improved ray_color with better bounce handling
 fn ray_color(initial_ray: Ray) -> vec3<f32> {
     var ray = initial_ray;
-    var accumulated_color = vec3(1.0);
-    var final_color = vec3(0.0);
-    let max_bounces = 5; // Increase for more realism
+    var throughput = vec3<f32>(1.0);
+    var final_color = vec3<f32>(0.0);
+    let max_bounces = 5;
 
     for (var bounce = 0; bounce < max_bounces; bounce += 1) {
         var res = hit(ray);
 
-        if res.t != 1e30 {
-            // Process the hit with proper shading
-            res = process_hit(ray, res);
-            if !is_accumulating_frames() {
-                return res.color;
+        if (res.t == 1e30) {
+            if all(res.p == vec3(1., 1., 1.)) {
+                return vec3(1., 0., 0.); // Error color
             }
-            
-            // Material type detection (you can make this data-driven)
-            let is_metallic = false; // Add material property to your hit record
-            let roughness = 0.5; // Control reflection sharpness
-
-            var next_direction: vec3<f32>;
-
-            if is_metallic {
-                // Metallic reflection
-                next_direction = reflect(ray.dir, res.normal);
-                // Add roughness
-                next_direction += random_unit_vector() * roughness;
-                next_direction = normalize(next_direction);
-
-                accumulated_color *= res.color;
-            } else {
-                // Diffuse (Lambertian) scattering
-                next_direction = res.normal + random_unit_vector();
-                
-                // Handle degenerate cases
-                if length(next_direction) < 0.001 {
-                    next_direction = res.normal;
-                } else {
-                    next_direction = normalize(next_direction);
-                }
-                
-                // Energy conservation for diffuse materials
-                accumulated_color *= res.color * 0.5;
-            }
-            
-            // Prepare next ray with small offset to avoid self-intersection
-            ray = Ray(res.p + next_direction * 0.001, next_direction);
-            
-            // Russian roulette termination for efficiency (optional)
-            let survival_probability = max(accumulated_color.r, max(accumulated_color.g, accumulated_color.b));
-            if rand(0., 2) > survival_probability && bounce > (max_bounces / 2) {
-                break;
-            }
-            // if min(accumulated_color.r, min(accumulated_color.g, accumulated_color.b)) < 0.01 {
-            //     accumulated_color = vec3(1., 0., 0.);
-            //     break;
-            // }
-            accumulated_color /= survival_probability;
-        } else {
-            // Hit skybox
+            // Sky contribution
             break;
         }
+
+        res = process_hit(ray, res);
+        // Material (simplified diffuse/metallic)
+        let is_metallic = false;
+        let roughness = 0.5;
+        var next_dir: vec3<f32>;
+
+        if (is_metallic) {
+            next_dir = reflect(ray.dir, res.normal) + random_unit_vector() * roughness;
+        } else {
+            next_dir = normalize(res.normal + random_unit_vector());
+            // return res.color;
+        }
+
+        // Update throughput (albedo * cosine term * 1/π for Lambertian)
+        let cos_theta = max(dot(next_dir, res.normal), 0.0);
+        throughput *= res.color * cos_theta;
+
+        // Russian roulette
+        let p = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 1.0);
+        if (rand(0.0, 1.0) > p && bounce > 2) { break; }
+        throughput /= p;
+
+        // Continue ray
+        ray = Ray(res.p + next_dir * 0.001, next_dir);
     }
-    if all(final_color == vec3(0.)) {
-        final_color = accumulated_color * skybox(ray.dir);
-    }
-    
-    // Apply tone mapping (Reinhard is more standard than your current approach)
+    final_color += throughput * skybox(ray.dir);
+    if (true) {return final_color;}
+
+    // Tonemap once
     return reinhard_tone_map(final_color);
 }
+
 
 // Better tone mapping function
 fn reinhard_tone_map(color: vec3<f32>) -> vec3<f32> {
@@ -1039,13 +1044,18 @@ fn compute(global_id: vec2<u32>) {
     if is_accumulating_frames() {
         samples_per_pixel = 2;
     }
-    var antialiasing = false;
-    if samples_per_pixel > 1 {antialiasing = true;}
     var c = vec3(0.);
 
-    rng_state = u32((((cam.accum_frames * 1301348925 * u32(429258578533. * sin(f32(cam.accum_frames) / 100.)))) & 0xFF) + global_id.x + global_id.y * cam.img_size.x);
-    rng_state += u32((abs(cam.center.x * 10000000. + cam.center.y * 1000000000. + cam.center.z * 10000000.)) % 14982428);
-    rng_state += u32((abs(cam.direction.x * 100000. + cam.direction.y * 1000000000. + cam.direction.z * 10.)) % 1497428372);
+    let cam_seed = wang_hash(
+        u32(abs(cam.center.x * 1000.0)) ^
+        u32(abs(cam.center.y * 1000.0)) ^
+        u32(abs(cam.center.z * 1000.0)) ^
+        u32(abs(cam.direction.x * 1000.0)) ^
+        u32(abs(cam.direction.y * 1000.0)) ^
+        u32(abs(cam.direction.z * 1000.0))
+    );
+    init_rng(global_id.xy, cam.accum_frames, cam_seed);
+
     for (var s = 0; s < samples_per_pixel; s++) {
         var offset = vec3(0.);
         if samples_per_pixel > 1 {
@@ -1067,30 +1077,12 @@ fn compute(global_id: vec2<u32>) {
         // if prev_t == 1e30 {return;}
         // r.orig = at(r, prev_t);
         
-        // r.orig = at(r, max_depth[global_id.x/2+global_id.y/2*(cam.img_size.x/2)]);
+        r.orig = at(r, max_depth[global_id.x/2+global_id.y/2*(cam.img_size.x/2)]);
         c += ray_color(r) / f32(samples_per_pixel);
     }
     
-
-
-
-    // c = vec3(rand_05_centered());
-    // let texcoord = vec2(i32(global_id.x), i32(global_id.y * cam.img_size.y));
-    // c = cam.direction;
-    // c = vec3(0.);
-    // c = vec3_rand(0, 1.);
     c *= 255.;
-    var out = vec4(vec3<u32>(abs(c)), 255u);
-    // out.r = u32(cam.img_size.x/100);
-    // out.g = u32(cam.img_size.y/100);
-    // out.b = u32(u32(cam.accum_frames));
-    // var out = vec4(0, 0, 0, 255u);
-    // var out = vec4(global_id, 255u);
-    if max(out.r, max(out.g, out.b)) > 255u {
-        let m = max(out.r, max(out.g, out.b));
-        // out = out * (255u / m);
-        out = vec4(1u);
-    }
+    var out = vec4(vec3<u32>(c), 255u);
     out.r = min(out.r, 255u);
     out.g = min(out.g, 255u);
     out.b = min(out.b, 255u);
@@ -1101,12 +1093,6 @@ fn compute(global_id: vec2<u32>) {
     let prev_v = vec4(prev & 0xffu, (prev >> 8u) & 0xffu, (prev >> 16u) & 0xffu, (prev >> 24u) & 0xffu);
     out = (prev_v * cam.accum_frames + out) / (cam.accum_frames + 1);
     accumulated_tex[idx] = (out.r) | ((out.g) << 8u) | ((out.b) << 16u) | ((out.a) << 24u);
-    // accumulated_tex[global_id.x+global_id.y*(cam.img_size.x)] = cam.accum_frames;
-    if cam.accum_frames % 2 == 0 {
-    // out = (textureLoad(accumulated_img, texcoord) * f32(cam.accum_frames) + out) / f32(cam.accum_frames + 1);
-    } else {
-        // accumulated_tex2[global_id.x+global_id.y*(cam.img_size.x)] = (out.r) | ((out.g) << 8u) | ((out.b) << 16u) | ((out.a) << 24u);
-    }
 }
 // const WORKGROUP_SIZE: u32 = 8;
 // @compute @workgroup_size(WORKGROUP_SIZE, WORKGROUP_SIZE, 1)

@@ -54,7 +54,8 @@ fn ray_depth(ray: Ray) -> f32 {
     // Hard cap to avoid infinite loops in degenerate cases
     var max_iter = 500;
     var bit_mask_for_chunk = array<u32, 2>();
-    for (var iter = 0; iter < max_iter; iter = iter + 1) {
+    var iter = 0;
+    for (; iter < max_iter; iter = iter + 1) {
         // Query world at current integer voxel position
         let posi = vec3<i32>(posf);
         let parent_pos = parent_pos_stack[curr_depth - 1u];
@@ -129,9 +130,12 @@ fn ray_depth(ray: Ray) -> f32 {
         //  }
 
         // nudge with scale-aware epsilon
-        let eps = 1e-3 * S;
+        let eps = (1e-3 * S)*(1. + f32(iter)/100.);
         posf += dir * (tStep + eps);
     }
+    // if iter >= max_iter {
+    //     return 1e29;
+    // }
     return ray_t_from_pos(ray, posf)-eps;
 }
 
@@ -172,9 +176,17 @@ fn compute(global_id: vec2<u32>, prev_t: f32) -> f32 {
     let pixel00_loc = viewport_upper_left + 0.5 * (pixel_delta_u + pixel_delta_v);
 
 
+    // Important shenanigangs to get a different seed for each pixel (trust me bruh)
+    let cam_seed = wang_hash(
+        u32(abs(cam.center.x * 1000.0)) ^
+        u32(abs(cam.center.y * 1000.0)) ^
+        u32(abs(cam.center.z * 1000.0)) ^
+        u32(abs(cam.direction.x * 1000.0)) ^
+        u32(abs(cam.direction.y * 1000.0)) ^
+        u32(abs(cam.direction.z * 1000.0))
+    );
+    init_rng(global_id.xy, cam.accum_frames, cam_seed);
 
-    rng_seed = f32((u32(f32(cam.accum_frames)))&(0xFF)) + (f32(global_id.x) + f32(global_id.y) * 10.);
-    
     let pixel_center = pixel00_loc + ((i) * pixel_delta_u) + ((j) * pixel_delta_v);
     var orig = lookfrom;
     var r = Ray(orig, normalize(pixel_center - lookfrom));

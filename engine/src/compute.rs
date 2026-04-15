@@ -497,7 +497,7 @@ impl render_graph::Node for BeamComputeNode {
 
         if let Some(init_pipeline) = pipeline_cache.get_compute_pipeline(pipeline.pipeline) {
             // Two passes: i=1 (1/4 resolution), i=0 (1/2 resolution)
-            for i in (0..=2u32).rev() {
+            for i in (0..=1u32).rev() {
                 let mut pass = render_context
                     .command_encoder()
                     .begin_compute_pass(&ComputePassDescriptor {

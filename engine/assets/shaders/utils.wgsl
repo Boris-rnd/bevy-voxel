@@ -45,7 +45,7 @@ fn reflect(v: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
     return v - 2. * dot(v, n) * n;
 }
 
-var<private> rng_seed: f32 = 1.;
+// var<private> rng_seed: f32 = 1.;
 
 fn random_unit_vector() -> vec3<f32> {
     for (var i = 0; i < 5; i++) {
@@ -79,10 +79,11 @@ fn random_in_unit_disk() -> vec3<f32> {
 }
 var<private> rng_state: u32;
 
-// Initialize RNG state based on pixel coordinates and frame number
-fn init_rng(pixel: vec2<u32>, frame: u32) {
-    // Combine pixel coordinates and frame into a unique seed
-    rng_state = wang_hash(pixel.x + wang_hash(pixel.y + wang_hash(frame)));
+// Init RNG: high-entropy seed from pixel + frame + camera state
+fn init_rng(pixel: vec2<u32>, frame: u32, cam_seed: u32) {
+    var seed = pixel.x * 374761393u ^ pixel.y * 668265263u;
+    seed = seed ^ frame * 362437u ^ cam_seed * 2246822519u;
+    rng_state = wang_hash(seed | 1u); // ensure non-zero
 }
 
 // Improved Wang hash function
@@ -386,6 +387,9 @@ fn valid_rec(color: vec3<f32>) -> HitRecord {
 }
 fn invalid_rec() -> HitRecord {
     return HitRecord(vec3(0.), vec3(0.), 1e30, vec3(0.));
+}
+fn to_far_away_rec() -> HitRecord {
+    return HitRecord(vec3(1.), vec3(0.), 1e30, vec3(0.));
 }
 
 struct MapData {
