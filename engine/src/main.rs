@@ -36,7 +36,7 @@ pub use material::*;
 
 fn main() {
     // let world = gen_world();
-    let world = load_world("engine/assets/world/castle.vox").unwrap();
+    let world = load_world("engine/assets/world/sponza.vox").unwrap();
     let root_max_depth = world.root_max_depth();
     let mut app = App::new();
     app
