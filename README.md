@@ -40,3 +40,4 @@ Refactor all of the code because it's a mess and a lot of stuff is broken
 Update everything
 In a perfect future I would also like to support some physics simulations inside the engine like fluids (like Grant Kot does in some videos)
 
+![[preview_castle_vox.png]]
